@@ -6,6 +6,8 @@ import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 from utils.MyMain import BenchmarkPipeline
 from utils.MyUtils import MyPipeline
+from utils.MyModels import ModelsImputation
+from utils.MyPreprocessing import PreprocessingDatasets
 from utils.MeLogSingle import MeLogger
 from utils.MyResults import AnalysisResults
 from time import sleep
@@ -62,51 +64,55 @@ def pipeline_benchmark_imputation(
                 X_treino = pd.DataFrame(x_treino, columns=X.columns)
                 X_teste = pd.DataFrame(x_teste, columns=X.columns)
 
+                # Inicializando o normalizador (scaler)
+                scaler = PreprocessingDatasets.inicializa_normalizacao(X_treino)
+
+                # Normalizando os dados
+                X_treino_norm = PreprocessingDatasets.normaliza_dados(scaler, X_treino)
+                X_teste_norm = PreprocessingDatasets.normaliza_dados(scaler, X_teste)
+
                 # Geração dos missing values em cada conjunto de forma independente
                 impt_md_train = mMNAR(
-                    X=X_treino,
+                    X=X_treino_norm,
                     y=y_treino,
-                    n_xmiss=X_treino.shape[1],
+                    n_xmiss=X_treino_norm.shape[1],
                     threshold=1,
                 )
-                X_treino_md = impt_md_train.random(missing_rate=md)
-                X_treino_md = X_treino_md.drop(columns="target")
+                X_treino_norm_md = impt_md_train.random(missing_rate=md)
+                X_treino_norm_md = X_treino_norm_md.drop(columns="target")
 
                 impt_md_test = mMNAR(
-                    X=X_teste,
+                    X=X_teste_norm,
                     y=y_teste,
-                    n_xmiss=X_teste.shape[1],
+                    n_xmiss=X_teste_norm.shape[1],
                     threshold=1,
                 )
-                X_teste_md = impt_md_test.random(missing_rate=md)
-                X_teste_md = X_teste_md.drop(columns="target")
+                X_teste_norm_md = impt_md_test.random(missing_rate=md)
+                X_teste_norm_md = X_teste_norm_md.drop(columns="target")
 
                 inicio_imputation = perf_counter()
                 attempt = 0
                 max_attempts = 3
                 while attempt < max_attempts:
                     try:
-                        if model_impt in ("rag-aggregation", "rag-llm"):
-                            rag_mode = "aggregation" if model_impt == "rag-aggregation" else "llm"
-                            imputer = RAGImputer(
-                                n_neighbors=5,
-                                mode=rag_mode,
-                                llm_model_name="openai/gpt-4.1-nano",
-                                llm_api=api,
-                                dataset_name=DATASET_NAMES.get(nome, nome),
-                            )
-                            imputer.fit(X_treino)
-                            imputed_arr = imputer.transform(X_teste_md)
-                            df_output_md_teste = pd.DataFrame(
-                                imputed_arr, columns=X_teste_md.columns
-                            )
-                        else:
-                            df_output_md_teste = llm_impute(
-                                dataset_name=DATASET_NAMES[nome],
-                                X_teste_norm_md=X_teste_md,
-                                model_name=model_impt,
-                                api=api
-                            )
+                        # Inicializando e treinando o modelo
+                        model_selected = ModelsImputation()
+        
+                        model = model_selected.choose_model(
+                            model=model_impt,
+                            x_train=X_treino_norm_md,
+                            x_test=X_teste_norm_md,
+                            x_test_complete=X_teste_norm,
+                            binary_val=binary_features,
+                            x_train_complete=X_treino_norm,
+                            input_shape=X_treino_norm.shape[1],
+                            api=api,
+                            dataset_name=DATASET_NAMES.get(nome, nome)
+                        )
+                        output_md_test_raw = model.transform(
+                            X_teste_norm_md.iloc[:, :].values
+                        )
+                        df_output_md_teste = pd.DataFrame(output_md_test_raw, columns=X.columns)
                         break
                     except Exception as e:
                         attempt += 1
@@ -136,8 +142,8 @@ def pipeline_benchmark_imputation(
                     mae_teste_std,
                 ) = AnalysisResults.gera_resultado_multiva_nrmse(
                     resposta=output_md_test,
-                    dataset_normalizado_md=X_teste_md,
-                    dataset_normalizado_original=X_teste,
+                    dataset_normalizado_md=X_teste_norm_md,
+                    dataset_normalizado_original=X_teste_norm,
                 )
 
                 tabela_resultados[f"{MAPPED_LLMS[model_impt]}/{nome}/{md}/{fold}/MAE"] = {

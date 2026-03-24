@@ -30,6 +30,9 @@ from algorithms.gain import Gain
 # RAG Imputer
 from algorithms.rag_imputer import RAGImputer
 
+# LLM 
+from algorithms.llm import MAPPED_LLMS, LLMWrapper
+
 # TabPFN
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn_extensions import unsupervised
@@ -349,3 +352,23 @@ class ModelsImputation:
                 )
                 imputer.fit(x_train)
                 return imputer
+                
+            case _ if model in MAPPED_LLMS:
+                self._logger.info(f"[{model}] Training (LLMWrapper)...")
+                feature_names = kwargs.get("feature_names", None)
+                if feature_names is None:
+                    # fallback if feature_names not provided, try to extract from x_test
+                    x_t = kwargs.get("x_test")
+                    if hasattr(x_t, "columns"):
+                        feature_names = list(x_t.columns)
+                    else:
+                        feature_names = [f"x{i}" for i in range(x_train.shape[1])]
+                        
+                wrapper = LLMWrapper(
+                    model_name=model,
+                    api=kwargs.get("api", "open_router"),
+                    dataset_name=kwargs.get("dataset_name", "Unknown Dataset"),
+                    feature_names=feature_names
+                )
+                wrapper.fit(x_train)
+                return wrapper

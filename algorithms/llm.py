@@ -308,3 +308,26 @@ def llm_impute(
         # Para performar imputação aqui
 
     return output
+
+class LLMWrapper:
+    """A minimal wrapper to make llm_impute compatible with sklearn-style fit/transform."""
+    def __init__(self, model_name: str, api: str, dataset_name: str, feature_names: list[str]):
+        self.model_name = model_name
+        self.api = api
+        self.dataset_name = dataset_name
+        self.feature_names = feature_names
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X) -> np.ndarray:
+        if not isinstance(X, pd.DataFrame):
+            X = pd.DataFrame(X, columns=self.feature_names)
+        
+        df_imputed = llm_impute(
+            dataset_name=self.dataset_name,
+            X_teste_norm_md=X,
+            model_name=self.model_name,
+            api=self.api
+        )
+        return df_imputed.values
