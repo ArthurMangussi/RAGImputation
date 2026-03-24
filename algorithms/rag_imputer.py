@@ -106,10 +106,11 @@ def _serialize_row(
     return ", ".join(parts) if parts else "no_observed_features"
 
 
-def _parse_llm_response(response_text: str, expected_cols: list[str]) -> dict:
-    """Extract column→value mapping from a LLM CSV response.
+def _parse_llm_response(response_text: str, expected_cols: list[str]) -> list[dict]:
+    """Extract multiple column→value mappings from a LLM CSV response.
 
-    Returns a dict {col_name: float} for every column found in the response.
+    Returns a list of dicts {col_name: float} for every column found in the response,
+    one dict for each row in the CSV.
     """
     match = re.search(r"```(?:csv)?\s*(.*?)\s*```", response_text, re.DOTALL)
     content = match.group(1).strip() if match else response_text.strip()
@@ -118,20 +119,23 @@ def _parse_llm_response(response_text: str, expected_cols: list[str]) -> dict:
         try:
             df = pd.read_csv(StringIO(content), sep=sep, engine="python")
             if len(df) >= 1:
-                row = df.iloc[0]
-                result = {}
-                for col in expected_cols:
-                    if col in row.index:
-                        try:
-                            result[col] = float(row[col])
-                        except (ValueError, TypeError):
-                            pass
-                if result:
-                    return result
+                results = []
+                for idx in range(len(df)):
+                    row = df.iloc[idx]
+                    result = {}
+                    for col in expected_cols:
+                        if col in row.index:
+                            try:
+                                result[col] = float(row[col])
+                            except (ValueError, TypeError):
+                                pass
+                    results.append(result)
+                if results:
+                    return results
         except Exception:
             continue
 
-    return {}
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -140,45 +144,50 @@ def _parse_llm_response(response_text: str, expected_cols: list[str]) -> dict:
 
 def _build_rag_prompt(
     dataset_name: str,
-    missing_row_text: str,
-    context_rows: list[str],
-    missing_cols: list[str],
+    batch_data: list[dict],
     all_cols: list[str],
 ) -> str:
     """Build a prompt that prepends retrieved context rows before asking the
-    LLM to impute the missing values in the query row.
+    LLM to impute the missing values in the query rows (batch processing).
     """
-    context_block = "\n".join(
-        f"  Context {i+1}: {row}" for i, row in enumerate(context_rows)
-    )
     headers_str = ", ".join(all_cols)
-    missing_str = ", ".join(missing_cols)
-
+    
     prompt = f"""You are an expert data analyst working with the {dataset_name} dataset.
 
-I will give you {len(context_rows)} similar complete records (retrieved context), \
-followed by an incomplete record with missing values.
-Your task is to impute ONLY the missing values in the incomplete record.
+I will give you {len(batch_data)} incomplete record(s) with missing values.
+For each incomplete record, I will provide similar complete records (retrieved context).
+Your task is to impute ONLY the missing values in the incomplete record(s).
+"""
 
+    for i, data in enumerate(batch_data):
+        context_block = "\n".join(
+            f"  Context {j+1}: {row}" for j, row in enumerate(data['context_rows'])
+        )
+        missing_str = ", ".join(data['missing_cols'])
+        prompt += f"""
+--- Record {i+1} ---
 Retrieved context records:
 {context_block}
 
 Incomplete record (observed features only):
-  Query: {missing_row_text}
+  Query: {data['missing_row_text']}
 
 Missing features to impute: [{missing_str}]
+"""
+
+    prompt += f"""
 All feature names ({len(all_cols)}): [{headers_str}]
 
 Output Format:
-Return a single CSV row inside a Markdown code block with ALL {len(all_cols)} columns \
-(observed + imputed), using the original values for observed features.
+Return exactly {len(batch_data)} CSV row(s) inside a single Markdown code block with ALL {len(all_cols)} columns \
+(observed + imputed), using the original values for observed features. Keep the exact order of the queried records.
 
 Strict Rules:
 1. Start with: ```csv
 2. First line inside the block = header: {headers_str}
-3. Second line = values (comma-separated)
+3. The next {len(batch_data)} line(s) = values (comma-separated), one line for each incomplete record.
 4. End with: ```
-5. No explanations. Every column must appear exactly once.
+5. No explanations. Every column must appear exactly once per row.
 6. Do NOT return NaN or ? for any value.
 """
     return prompt
@@ -353,27 +362,28 @@ class RAGImputer(BaseEstimator, TransformerMixin):
             ).sum(axis=0)
         return result
 
-    def _llm_impute_row(
+    def _llm_impute_batch(
         self,
-        row: np.ndarray,
-        missing_mask: np.ndarray,
-        neighbour_indices: np.ndarray,
+        batch_rows: list[np.ndarray],
+        batch_missing_masks: list[np.ndarray],
+        batch_neighbour_indices: list[np.ndarray],
         col_names: list[str],
-    ) -> np.ndarray:
-        """Call LLM with retrieved context to impute a single row."""
-        # Build context texts
-        context_texts = [self.context_texts_[i] for i in neighbour_indices]
-
-        # Query text (observed features only)
-        query_text = _serialize_row(row, col_names, mask_nan=missing_mask)
-
-        missing_cols = [col_names[i] for i in np.where(missing_mask)[0]]
+    ) -> list[np.ndarray]:
+        """Call LLM with retrieved context to impute a batch of rows."""
+        batch_data = []
+        for row, missing_mask, neighbour_indices in zip(batch_rows, batch_missing_masks, batch_neighbour_indices):
+            context_texts = [self.context_texts_[i] for i in neighbour_indices]
+            query_text = _serialize_row(row, col_names, mask_nan=missing_mask)
+            missing_cols = [col_names[i] for i in np.where(missing_mask)[0]]
+            batch_data.append({
+                "missing_row_text": query_text,
+                "context_rows": context_texts,
+                "missing_cols": missing_cols,
+            })
 
         prompt = _build_rag_prompt(
             dataset_name=self.dataset_name,
-            missing_row_text=query_text,
-            context_rows=context_texts,
-            missing_cols=missing_cols,
+            batch_data=batch_data,
             all_cols=col_names,
         )
 
@@ -381,24 +391,30 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         response_text = self._call_llm(prompt)
 
         # Parse the response
-        imputed_vals = _parse_llm_response(response_text, col_names)
+        imputed_vals_list = _parse_llm_response(response_text, col_names)
 
-        result = row.copy()
-        for i, col in enumerate(col_names):
-            if missing_mask[i]:
-                if col in imputed_vals:
-                    result[i] = imputed_vals[col]
-                else:
-                    # Fallback: use mean of context neighbours
-                    context_arr = self.context_store_[neighbour_indices]
-                    result[i] = context_arr[:, i].mean()
-                    warnings.warn(
-                        f"LLM did not return value for '{col}'. "
-                        "Using neighbour mean as fallback.",
-                        UserWarning,
-                        stacklevel=4,
-                    )
-        return result
+        results = []
+        for i, (row, missing_mask, neighbour_indices) in enumerate(zip(batch_rows, batch_missing_masks, batch_neighbour_indices)):
+            result = row.copy()
+            imputed_vals = imputed_vals_list[i] if i < len(imputed_vals_list) else {}
+            
+            for j, col in enumerate(col_names):
+                if missing_mask[j]:
+                    if col in imputed_vals:
+                        result[j] = imputed_vals[col]
+                    else:
+                        # Fallback: use mean of context neighbours
+                        context_arr = self.context_store_[neighbour_indices]
+                        result[j] = context_arr[:, j].mean()
+                        warnings.warn(
+                            f"LLM did not return value for '{col}' in row {i} of batch. "
+                            "Using neighbour mean as fallback.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
+            results.append(result)
+            
+        return results
 
     def _call_llm(self, prompt: str) -> str:
         """Dispatch a single prompt to the configured LLM backend."""
@@ -550,6 +566,11 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         col_names = self._get_col_names(self.n_features_in_)
         k = min(self.n_neighbors, len(self.context_store_))
 
+        batch_indices = []
+        batch_rows = []
+        batch_missing_masks = []
+        batch_nn_indices = []
+
         for i, row in enumerate(X_arr):
             missing_mask = np.isnan(row)
             if not missing_mask.any():
@@ -583,9 +604,29 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                     neighbours, nn_dists, missing_mask, row
                 )
             else:  # "llm"
-                X_arr[i] = self._llm_impute_row(
-                    row, missing_mask, nn_indices, col_names
-                )
+                batch_indices.append(i)
+                batch_rows.append(row)
+                batch_missing_masks.append(missing_mask)
+                batch_nn_indices.append(nn_indices)
+
+                if len(batch_indices) == self.llm_batch_size:
+                    imputed_rows = self._llm_impute_batch(
+                        batch_rows, batch_missing_masks, batch_nn_indices, col_names
+                    )
+                    for idx, imp_row in zip(batch_indices, imputed_rows):
+                        X_arr[idx] = imp_row
+                    
+                    batch_indices.clear()
+                    batch_rows.clear()
+                    batch_missing_masks.clear()
+                    batch_nn_indices.clear()
+
+        if batch_indices:  # process remaining
+            imputed_rows = self._llm_impute_batch(
+                batch_rows, batch_missing_masks, batch_nn_indices, col_names
+            )
+            for idx, imp_row in zip(batch_indices, imputed_rows):
+                X_arr[idx] = imp_row
 
         return X_arr
 
