@@ -197,3 +197,8 @@ if __name__ == "__main__":
     mecanismo = "MCAR"
 
     pipeline_benchmark_imputation("rag", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("knn", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("softimpute", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("missForest", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("mice", mecanismo, tabela_resultados)
+    

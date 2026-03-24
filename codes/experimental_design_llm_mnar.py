@@ -15,11 +15,18 @@ from mdatagen.multivariate.mMNAR import mMNAR
 from time import perf_counter
 import os
 
-from algorithms.llm import DATASET_NAMES, llm_impute, MAPPED_LLMS
-from algorithms.rag_imputer import RAGImputer
+from algorithms.llm import DATASET_NAMES, MAPPED_LLMS
 
 # Register RAG in the mapped-LLM table so directory names are consistent
-MAPPED_LLMS = {**MAPPED_LLMS, "rag-aggregation": "ragAgg", "rag-llm": "ragLLM"}
+MAPPED_LLMS = {
+    **MAPPED_LLMS,
+    "rag": "rag",
+    "knn": "knn",
+    "missForest": "missForest",
+    "mice": "mice",
+    "softImpute": "softImpute",
+    "gain": "gain",
+}
 
 
 def pipeline_benchmark_imputation(
@@ -106,7 +113,8 @@ def pipeline_benchmark_imputation(
                             binary_val=binary_features,
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
-                            api=api,
+                            llm_api="gemini",
+                            mode="llm",
                             dataset_name=DATASET_NAMES.get(nome, nome)
                         )
                         output_md_test_raw = model.transform(
@@ -140,7 +148,7 @@ def pipeline_benchmark_imputation(
                 (
                     mae_teste_mean,
                     mae_teste_std,
-                ) = AnalysisResults.gera_resultado_multiva_nrmse(
+                ) = AnalysisResults.gera_resultado_multiva(
                     resposta=output_md_test,
                     dataset_normalizado_md=X_teste_norm_md,
                     dataset_normalizado_original=X_teste_norm,
@@ -189,7 +197,7 @@ if __name__ == "__main__":
 
     mecanismo = "MNAR"
         
-    pipeline_benchmark_imputation(
-        "anthropic/claude-sonnet-4.5", 
-        mecanismo, 
-        tabela_resultados)
+    pipeline_benchmark_imputation("rag", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("knn", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("missForest", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("mice", mecanismo, tabela_resultados)

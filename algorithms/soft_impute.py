@@ -94,7 +94,7 @@ class SoftImpute:
         res = self.u.dot(vd.T)
         return res
 
-    def predict(self, X, copyto=False):
+    def transform(self, X, copyto=False):
         vd = self.v * np.outer(np.ones(self.v.shape[0]), self.d)
         X_imp = self.suv(vd)
         if copyto:

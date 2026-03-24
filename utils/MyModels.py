@@ -342,14 +342,14 @@ class ModelsImputation:
                     "[RAGImputer] Building context store with embeddings + FAISS..."
                 )
                 imputer = RAGImputer(
-                    n_neighbors=kwargs.get("n_neighbors", 5),
+                    n_neighbors=kwargs.get("n_neighbors", 3),
                     embedding_model=kwargs.get("embedding_model", "all-MiniLM-L6-v2"),
                     faiss_index_type=kwargs.get("faiss_index_type", "flat"),
                     mode=kwargs.get("mode", "aggregation"),
                     aggregation=kwargs.get("aggregation", "weighted"),
                     weights_power=kwargs.get("weights_power", 2.0),
-                    llm_model_name=kwargs.get("llm_model_name", "openai/gpt-4.1-nano"),
-                    llm_api=kwargs.get("llm_api", "open_router"),
+                    llm_model_name=kwargs.get("llm_model_name", "gemini-3-flash-preview"),
+                    llm_api=kwargs.get("llm_api", "gemini"),
                     dataset_name=kwargs.get("dataset_name", "Unknown Dataset"),
                     llm_batch_size=kwargs.get("llm_batch_size", 1),
                 )
