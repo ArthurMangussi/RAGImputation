@@ -24,20 +24,23 @@ MAPPED_LLMS = {**MAPPED_LLMS, "rag-aggregation": "ragAgg", "rag-llm": "ragLLM"}
 
 
 def pipeline_benchmark_imputation(
-    model_impt: str, mecanismo: str, tabela_resultados: dict, api:str="open_router"
+    model_impt: str, mecanismo: str, tabela_resultados: dict, api: str = "open_router"
 ):
     "Main pipeline to perform imputation MCAR multivariate mechanism."
     _logger = MeLogger()
 
     # Cria diretórios para salvar os resultados do experimento
     os.makedirs(
-        f"./results/{MAPPED_LLMS[model_impt]}/Tempos/{mecanismo}_Multivariado", exist_ok=True
+        f"./results/{MAPPED_LLMS[model_impt]}/Tempos/{mecanismo}_Multivariado",
+        exist_ok=True,
     )
     os.makedirs(
-        f"./results/{MAPPED_LLMS[model_impt]}/Datasets/{mecanismo}_Multivariado", exist_ok=True
+        f"./results/{MAPPED_LLMS[model_impt]}/Datasets/{mecanismo}_Multivariado",
+        exist_ok=True,
     )
     os.makedirs(
-        f"./results/{MAPPED_LLMS[model_impt]}/Resultados/{mecanismo}_Multivariado", exist_ok=True
+        f"./results/{MAPPED_LLMS[model_impt]}/Resultados/{mecanismo}_Multivariado",
+        exist_ok=True,
     )
 
     for md in tabela_resultados["missing_rate"]:
@@ -63,7 +66,7 @@ def pipeline_benchmark_imputation(
 
                 X_treino = pd.DataFrame(x_treino, columns=X.columns)
                 X_teste = pd.DataFrame(x_teste, columns=X.columns)
-                
+
                 # Inicializando o normalizador (scaler)
                 scaler = PreprocessingDatasets.inicializa_normalizacao(X_treino)
 
@@ -73,21 +76,17 @@ def pipeline_benchmark_imputation(
 
                 # Geração dos missing values em cada conjunto de forma independente
                 impt_md_train = mMCAR(
-                    X=X_treino_norm,
-                    y=y_treino,
-                    n_xmiss=X_treino_norm.shape[1]
+                    X=X_treino_norm, y=y_treino, n_xmiss=X_treino_norm.shape[1]
                 )
                 X_treino_norm_md = impt_md_train.random(missing_rate=md)
                 X_treino_norm_md = X_treino_norm_md.drop(columns="target")
-                
+
                 impt_md_test = mMCAR(
-                    X=X_teste_norm,
-                    y=y_teste,
-                    n_xmiss=X_teste_norm.shape[1]
+                    X=X_teste_norm, y=y_teste, n_xmiss=X_teste_norm.shape[1]
                 )
                 X_teste_norm_md = impt_md_test.random(missing_rate=md)
                 X_teste_norm_md = X_teste_norm_md.drop(columns="target")
-                
+
                 inicio_imputation = perf_counter()
                 attempt = 0
                 max_attempts = 3
@@ -95,7 +94,7 @@ def pipeline_benchmark_imputation(
                     try:
                         # Inicializando e treinando o modelo
                         model_selected = ModelsImputation()
-        
+
                         model = model_selected.choose_model(
                             model=model_impt,
                             x_train=X_treino_norm_md,
@@ -105,20 +104,26 @@ def pipeline_benchmark_imputation(
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
                             api=api,
-                            dataset_name=DATASET_NAMES.get(nome, nome)
+                            dataset_name=DATASET_NAMES.get(nome, nome),
                         )
                         output_md_test_raw = model.transform(
                             X_teste_norm_md.iloc[:, :].values
                         )
-                        df_output_md_teste = pd.DataFrame(output_md_test_raw, columns=X.columns)
+                        df_output_md_teste = pd.DataFrame(
+                            output_md_test_raw, columns=X.columns
+                        )
                         break
                     except Exception as e:
                         attempt += 1
                         if attempt == max_attempts:
-                            _logger.info("Max retries reached. Service still unavailable.")
+                            _logger.info(
+                                "Max retries reached. Service still unavailable."
+                            )
                             raise
-                        wait_time = 2 ** attempt
-                        print(f"Model overloaded. Retrying in {wait_time}s... (Attempt {attempt}/{max_attempts})")
+                        wait_time = 2**attempt
+                        print(
+                            f"Model overloaded. Retrying in {wait_time}s... (Attempt {attempt}/{max_attempts})"
+                        )
                         sleep(wait_time)
 
                 fim_imputation = perf_counter()
@@ -137,20 +142,20 @@ def pipeline_benchmark_imputation(
                 (
                     mae_teste_mean,
                     mae_teste_std,
-                ) = AnalysisResults.gera_resultado_multiva_nrmse(
+                ) = AnalysisResults.gera_resultado_multiva(
                     resposta=output_md_test,
                     dataset_normalizado_md=X_teste_norm_md,
                     dataset_normalizado_original=X_teste_norm,
                 )
 
-                tabela_resultados[f"{MAPPED_LLMS[model_impt]}/{nome}/{md}/{fold}/MAE"] = {
-                    "teste": round(mae_teste_mean, 3)
-                }
+                tabela_resultados[
+                    f"{MAPPED_LLMS[model_impt]}/{nome}/{md}/{fold}/MAE"
+                ] = {"teste": round(mae_teste_mean, 3)}
 
                 # Dataset imputado
                 data_imputed = pd.DataFrame(output_md_test.copy(), columns=X.columns)
                 data_imputed["target"] = y_teste
-                
+
                 data_imputed.to_csv(
                     f"./results/{MAPPED_LLMS[model_impt]}/Datasets/{mecanismo}_Multivariado/{nome}_{MAPPED_LLMS[model_impt]}_fold{fold}_md{md}.csv",
                     index=False,
@@ -185,12 +190,7 @@ if __name__ == "__main__":
     tabela_resultados = pipeline.cria_tabela()
 
     mecanismo = "MCAR"
-    
-    pipeline_benchmark_imputation(
-        "anthropic/claude-sonnet-4.5", 
-        mecanismo, 
-        tabela_resultados)
-    
- 
 
-    
+    pipeline_benchmark_imputation(
+        "anthropic/claude-sonnet-4.5", mecanismo, tabela_resultados
+    )

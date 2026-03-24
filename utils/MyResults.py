@@ -28,30 +28,29 @@ class AnalysisResults:
     # ------------------------------------------------------------------------
     @staticmethod
     def gera_resultado_univa(
-        resposta, dataset_normalizado_md, dataset_normalizado_original, missing_id,flag=True
+        resposta: pd.DataFrame, 
+        dataset_normalizado_md: pd.DataFrame, 
+        dataset_normalizado_original: pd.DataFrame, 
+        missing_id: int,
+        flag: bool = True
     ):
+        col_name = dataset_normalizado_md.columns[missing_id]
+        missing_mask = dataset_normalizado_md.iloc[:, missing_id].isna()
         
-        linhas_nan = dataset_normalizado_md.iloc[:, missing_id][
-            dataset_normalizado_md.iloc[:, missing_id].isna()
-        ].index
-        original = dataset_normalizado_original.copy()
+        y_true = dataset_normalizado_original.loc[missing_mask, col_name]
+        y_pred = resposta.loc[missing_mask, col_name]
 
         if flag:
-            return mean_absolute_error(
-                y_true=original.iloc[linhas_nan, missing_id],
-                y_pred=resposta[linhas_nan, missing_id]
-            )
-        
+            return mean_absolute_error(y_true=y_true, y_pred=y_pred)
         else:
-            return AnalysisResults.correct_predictions(y_true=original.iloc[linhas_nan, missing_id],
-                                                       y_pred=resposta.iloc[linhas_nan, missing_id])
+            return AnalysisResults.correct_predictions(y_true=y_true, y_pred=y_pred)
 
     # ------------------------------------------------------------------------
     @staticmethod
     def gera_resultado_multiva_nrmse(
-        resposta,
-        dataset_normalizado_md,
-        dataset_normalizado_original,
+        resposta: pd.DataFrame,
+        dataset_normalizado_md: pd.DataFrame,
+        dataset_normalizado_original: pd.DataFrame,
     ):
         nrmses = []
         features = dataset_normalizado_md.columns[
@@ -59,20 +58,17 @@ class AnalysisResults:
         ].tolist()
 
         for feature in features:
-            missing_id = dataset_normalizado_md.columns.get_loc(feature)
-            linhas_nan = dataset_normalizado_md.iloc[:, missing_id][
-                dataset_normalizado_md.iloc[:, missing_id].isna()
-            ].index
-            original = dataset_normalizado_original.copy()
+            missing_mask = dataset_normalizado_md[feature].isna()
 
-            y_true = original.iloc[linhas_nan, missing_id]
-            y_pred = resposta.iloc[linhas_nan, missing_id]
+            y_true = dataset_normalizado_original.loc[missing_mask, feature]
+            y_pred = resposta.loc[missing_mask, feature]
             
             # Cálculo do RMSE
             rmse = root_mean_squared_error(y_true, y_pred)
             
-            # Normalização pela amplitude (Max - Min) da coluna original
-            amplitude = float(original.iloc[:, missing_id].max()) - float(original.iloc[:, missing_id].min())
+            # Normalização pela amplitude (Max - Min) da coluna original inteira
+            original_col = dataset_normalizado_original[feature].astype(float)
+            amplitude = original_col.max() - original_col.min()
             
             # Evita divisão por zero
             nrmse = rmse / amplitude if amplitude != 0 else rmse
@@ -83,9 +79,9 @@ class AnalysisResults:
     # ------------------------------------------------------------------------
     @staticmethod
     def gera_resultado_multiva(
-        resposta,
-        dataset_normalizado_md,
-        dataset_normalizado_original,
+        resposta: pd.DataFrame,
+        dataset_normalizado_md: pd.DataFrame,
+        dataset_normalizado_original: pd.DataFrame,
     ):
         maes = []
         features = dataset_normalizado_md.columns[
@@ -93,16 +89,12 @@ class AnalysisResults:
         ].tolist()
 
         for feature in features:
-            missing_id = dataset_normalizado_md.columns.get_loc(feature)
-            linhas_nan = dataset_normalizado_md.iloc[:, missing_id][
-                dataset_normalizado_md.iloc[:, missing_id].isna()
-            ].index
-            original = dataset_normalizado_original.copy()
+            missing_mask = dataset_normalizado_md[feature].isna()
 
-            mae = mean_absolute_error(
-                y_true=original.iloc[linhas_nan, missing_id],
-                y_pred=resposta.iloc[linhas_nan, missing_id],
-            )
+            y_true = dataset_normalizado_original.loc[missing_mask, feature]
+            y_pred = resposta.loc[missing_mask, feature]
+
+            mae = mean_absolute_error(y_true=y_true, y_pred=y_pred)
             maes.append(mae)
 
         return np.mean(maes), np.std(maes)
