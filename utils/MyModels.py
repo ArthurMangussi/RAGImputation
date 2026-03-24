@@ -30,12 +30,13 @@ from algorithms.gain import Gain
 # RAG Imputer
 from algorithms.rag_imputer import RAGImputer
 
-# LLM 
+# LLM
 from algorithms.llm import MAPPED_LLMS, LLMWrapper
 
 # TabPFN
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn_extensions import unsupervised
+
+# from tabpfn_extensions import unsupervised
 
 import pandas as pd
 import numpy as np
@@ -337,22 +338,24 @@ class ModelsImputation:
                 return ModelsImputation.model_missForest(x_train)
 
             case "rag":
-                self._logger.info("[RAGImputer] Building context store with embeddings + FAISS...")
+                self._logger.info(
+                    "[RAGImputer] Building context store with embeddings + FAISS..."
+                )
                 imputer = RAGImputer(
-                    n_neighbors      = kwargs.get("n_neighbors", 5),
-                    embedding_model  = kwargs.get("embedding_model", "all-MiniLM-L6-v2"),
-                    faiss_index_type = kwargs.get("faiss_index_type", "flat"),
-                    mode             = kwargs.get("mode", "aggregation"),
-                    aggregation      = kwargs.get("aggregation", "weighted"),
-                    weights_power    = kwargs.get("weights_power", 2.0),
-                    llm_model_name   = kwargs.get("llm_model_name", "openai/gpt-4.1-nano"),
-                    llm_api          = kwargs.get("llm_api", "open_router"),
-                    dataset_name     = kwargs.get("dataset_name", "Unknown Dataset"),
-                    llm_batch_size   = kwargs.get("llm_batch_size", 1),
+                    n_neighbors=kwargs.get("n_neighbors", 5),
+                    embedding_model=kwargs.get("embedding_model", "all-MiniLM-L6-v2"),
+                    faiss_index_type=kwargs.get("faiss_index_type", "flat"),
+                    mode=kwargs.get("mode", "aggregation"),
+                    aggregation=kwargs.get("aggregation", "weighted"),
+                    weights_power=kwargs.get("weights_power", 2.0),
+                    llm_model_name=kwargs.get("llm_model_name", "openai/gpt-4.1-nano"),
+                    llm_api=kwargs.get("llm_api", "open_router"),
+                    dataset_name=kwargs.get("dataset_name", "Unknown Dataset"),
+                    llm_batch_size=kwargs.get("llm_batch_size", 1),
                 )
                 imputer.fit(x_train)
                 return imputer
-                
+
             case _ if model in MAPPED_LLMS:
                 self._logger.info(f"[{model}] Training (LLMWrapper)...")
                 feature_names = kwargs.get("feature_names", None)
@@ -363,12 +366,12 @@ class ModelsImputation:
                         feature_names = list(x_t.columns)
                     else:
                         feature_names = [f"x{i}" for i in range(x_train.shape[1])]
-                        
+
                 wrapper = LLMWrapper(
                     model_name=model,
                     api=kwargs.get("api", "open_router"),
                     dataset_name=kwargs.get("dataset_name", "Unknown Dataset"),
-                    feature_names=feature_names
+                    feature_names=feature_names,
                 )
                 wrapper.fit(x_train)
                 return wrapper

@@ -16,11 +16,18 @@ from mdatagen.multivariate.mMCAR import mMCAR
 from time import perf_counter, sleep
 import os
 
-from algorithms.llm import DATASET_NAMES, llm_impute, MAPPED_LLMS
-from algorithms.rag_imputer import RAGImputer
+from algorithms.llm import DATASET_NAMES, MAPPED_LLMS
 
 # Register RAG in the mapped-LLM table so directory names are consistent
-MAPPED_LLMS = {**MAPPED_LLMS, "rag-aggregation": "ragAgg", "rag-llm": "ragLLM"}
+MAPPED_LLMS = {
+    **MAPPED_LLMS,
+    "rag": "rag",
+    "knn": "knn",
+    "missforest": "missforest",
+    "mice": "mice",
+    "softimpute": "softimpute",
+    "gain": "gain",
+}
 
 
 def pipeline_benchmark_imputation(
@@ -76,16 +83,14 @@ def pipeline_benchmark_imputation(
 
                 # Geração dos missing values em cada conjunto de forma independente
                 impt_md_train = mMCAR(
-                    X=X_treino_norm, y=y_treino, n_xmiss=X_treino_norm.shape[1]
+                    X=X_treino_norm, y=y_treino, missing_rate=md, seed=fold
                 )
-                X_treino_norm_md = impt_md_train.random(missing_rate=md)
-                X_treino_norm_md = X_treino_norm_md.drop(columns="target")
+                X_treino_norm_md = impt_md_train.random()
 
                 impt_md_test = mMCAR(
-                    X=X_teste_norm, y=y_teste, n_xmiss=X_teste_norm.shape[1]
+                    X=X_teste_norm, y=y_teste, missing_rate=md, seed=fold
                 )
-                X_teste_norm_md = impt_md_test.random(missing_rate=md)
-                X_teste_norm_md = X_teste_norm_md.drop(columns="target")
+                X_teste_norm_md = impt_md_test.random()
 
                 inicio_imputation = perf_counter()
                 attempt = 0
@@ -191,6 +196,4 @@ if __name__ == "__main__":
 
     mecanismo = "MCAR"
 
-    pipeline_benchmark_imputation(
-        "anthropic/claude-sonnet-4.5", mecanismo, tabela_resultados
-    )
+    pipeline_benchmark_imputation("rag", mecanismo, tabela_resultados)

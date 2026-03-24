@@ -488,7 +488,7 @@ class BenchmarkPipeline:
             syn_three.astype(float),
             syn_rept_one.astype(float),
             syn_rept_two.astype(float),
-            syn_rept_three.astype(float)
+            syn_rept_three.astype(float),
         ]
 
         tabela_resultados["nome_datasets"] = [
@@ -500,7 +500,7 @@ class BenchmarkPipeline:
             "synthetic-three",
             "synthetic-repeted-one",
             "synthetic-repeted-two",
-            "synthetic-repeted-three" 
+            "synthetic-repeted-three",
         ]
         tabela_resultados["missing_rate"] = [5, 10, 20]
 
@@ -511,14 +511,14 @@ class BenchmarkPipeline:
         tabela_resultados = {}
 
         tabela_resultados["datasets"] = [
-            # self.pima,
-            # self.cleveland,
-            # self.wiscosin,
-            # self.parkinsons,
-            # self.hepatitis,
-            # self.mathernal_risk,
-            # self.chronic,
-            # self.stalog,
+            self.pima,
+            self.cleveland,
+            self.wiscosin,
+            self.parkinsons,
+            self.hepatitis,
+            self.mathernal_risk,
+            self.chronic,
+            self.stalog,
             self.cervical,
             self.iris,
             self.wine,
@@ -531,18 +531,17 @@ class BenchmarkPipeline:
             self.compass_4k,
             self.stroke,
             self.compass_7k,
-            
         ]
 
         tabela_resultados["nome_datasets"] = [
-            # "pima",
-            # "cleveland",
-            # "wiscosin",
-            # "parkinsons",
-            # "hepatitis",
-            # "mathernal_risk",
-            # "chronic",
-            # "stalog",
+            "pima",
+            "cleveland",
+            "wiscosin",
+            "parkinsons",
+            "hepatitis",
+            "mathernal_risk",
+            "chronic",
+            "stalog",
             "cervical",
             "iris",
             "wine",
@@ -555,7 +554,6 @@ class BenchmarkPipeline:
             "compass-4k",
             "stroke",
             "compass-7k",
-            
         ]
 
         tabela_resultados["missing_rate"] = [5, 10, 20]

@@ -2,13 +2,14 @@ import pandas as pd
 from google import genai
 from google.genai import types
 from io import StringIO
-
+import numpy as np
 import re, os
 from dotenv import load_dotenv
-from openai import OpenAI
+
+# from openai import OpenAI
 from utils.MeLogSingle import MeLogger
 
-import anthropic
+# import anthropic
 
 _logger = MeLogger()
 
@@ -19,12 +20,12 @@ MAPPED_LLMS = {
     "gemini-2.5-flash-lite": "geminiLite",
     "mistralai/devstral-2512": "mistral",
     "xiaomi/mimo-v2-flash": "xiamoi",
-    "openai/gpt-4.1-nano":"gpt41nano",
+    "openai/gpt-4.1-nano": "gpt41nano",
     "gpt-5-mini": "gptMini",
     "gpt-5": "gpt5",
     "anthropic/claude-sonnet-4.5": "claude45",
     "tngtech/tng-r1t-chimera": "deepseek",
-    "moonshotai/kimi-k2.5":"kimi"
+    "moonshotai/kimi-k2.5": "kimi",
 }
 
 DATASET_NAMES = {
@@ -38,16 +39,16 @@ DATASET_NAMES = {
     "stalog": "Statlog (Heart)",
     "mathernal_risk": "Maternal Health Risk",
     "stroke": "Stroke Prediction Dataset",
-    "iris":'Iris',
-    "wine":"Wine",
-    "bc_coimbra":"Breast Cancer Coimbra",
-    "student_math":"Student Performance (Math)",
-    "student_port":"Student Performance (Port)",
-    "user":"User Knowledge Modeling",
+    "iris": "Iris",
+    "wine": "Wine",
+    "bc_coimbra": "Breast Cancer Coimbra",
+    "student_math": "Student Performance (Math)",
+    "student_port": "Student Performance (Port)",
+    "user": "User Knowledge Modeling",
     "credit-approval": "Credit Card Approvals",
-    "german-credit":"German Credit",
-    "compass-4k":"COMPAS Recidivism",
-    "compass-7k":"COMPAS viol Recidivism",
+    "german-credit": "German Credit",
+    "compass-4k": "COMPAS Recidivism",
+    "compass-7k": "COMPAS viol Recidivism",
     # Dataset Sintético
     "synthetic-cont-cat": "Synthetic",
     "synthetic-cat": "Synthetic",
@@ -57,28 +58,29 @@ DATASET_NAMES = {
     "synthetic-three": "Synthetic",
     "synthetic-repeted-two": "Synthetic",
     "synthetic-repeted-three": "Synthetic",
-    "synthetic-repeted" : "Synthetic"
-
+    "synthetic-repeted": "Synthetic",
 }
+
 
 def tratar_dados_infor(data_array):
     # 1. Extrair as strings de dentro das sub-listas e criar uma lista simples
     # data_array[:, 0] pega o conteúdo de cada sub-array
     raw_strings = data_array.flatten()
-    
+
     # 2. Dividir as strings pela vírgula
     # Isso cria uma lista de listas: [['120', '0.00', ...], ['121', ...]]
-    split_data = [line.split(',') for line in raw_strings]
-    
+    split_data = [line.split(",") for line in raw_strings]
+
     # 3. Criar o DataFrame
     df = pd.DataFrame(split_data)
     df = df.drop(columns=df.columns[0])
-    
+
     # 4. Converter tudo para numérico (as colunas vêm como strings)
     # pd.to_numeric com errors='coerce' ajuda se houver algum lixo nos dados
-    df = df.apply(pd.to_numeric, errors='ignore')
-    
+    df = df.apply(pd.to_numeric, errors="ignore")
+
     return df
+
 
 def clean_and_parse_llm_data(response_text, expected_shape):
     # 1. Extração via Regex (Limpa as "conversas" da LLM)
@@ -301,7 +303,7 @@ def llm_impute(
                 mean_val = output[col].astype(float).mean()
                 # If the whole column is NaN (LLM failed entirely), use 0
                 fill_val = mean_val if not pd.isna(mean_val) else 0.5
-                
+
                 output[col] = output[col].fillna(fill_val)
 
         # Para um framework, podemos adotar um Imputador (ex: MICE)
@@ -309,9 +311,13 @@ def llm_impute(
 
     return output
 
+
 class LLMWrapper:
     """A minimal wrapper to make llm_impute compatible with sklearn-style fit/transform."""
-    def __init__(self, model_name: str, api: str, dataset_name: str, feature_names: list[str]):
+
+    def __init__(
+        self, model_name: str, api: str, dataset_name: str, feature_names: list[str]
+    ):
         self.model_name = model_name
         self.api = api
         self.dataset_name = dataset_name
@@ -323,11 +329,11 @@ class LLMWrapper:
     def transform(self, X) -> np.ndarray:
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X, columns=self.feature_names)
-        
+
         df_imputed = llm_impute(
             dataset_name=self.dataset_name,
             X_teste_norm_md=X,
             model_name=self.model_name,
-            api=self.api
+            api=self.api,
         )
         return df_imputed.values
