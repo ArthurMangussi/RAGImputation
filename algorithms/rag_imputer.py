@@ -99,10 +99,13 @@ def _serialize_row(
     str  e.g. "age=0.45, glucose=0.71, bmi=0.38"
     """
     parts = []
-    for name, val in zip(col_names, values):
-        if mask_nan is not None and mask_nan[col_names.index(name)]:
-            continue  # skip missing features in query rows
-        parts.append(f"{name}={val:.4f}")
+    if mask_nan is not None:
+        for val, name, is_nan in zip(values, col_names, mask_nan):
+            if not is_nan:
+                parts.append(f"{name}={val:.4f}")
+    else:
+        for val, name in zip(values, col_names):
+            parts.append(f"{name}={val:.4f}")
     return ", ".join(parts) if parts else "no_observed_features"
 
 
@@ -314,6 +317,7 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         """Encode a list of strings → float32 matrix (n, d)."""
         vecs = self.embedding_model_.encode(
             texts,
+            batch_size=128,
             convert_to_numpy=True,
             show_progress_bar=False,
             normalize_embeddings=True,   # cosine-equivalent L2 on unit sphere
@@ -570,7 +574,11 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         batch_rows = []
         batch_missing_masks = []
         batch_nn_indices = []
+        
+        valid_missing_indices = []
+        query_texts = []
 
+        # ── Pass 1: Handle complete/fully-missing rows and gather query texts ─
         for i, row in enumerate(X_arr):
             missing_mask = np.isnan(row)
             if not missing_mask.any():
@@ -589,22 +597,32 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                 )
                 continue
 
-            # ── Embed query (observed features only) ─────────────────
             query_text = _serialize_row(row, col_names, mask_nan=missing_mask)
-            query_vec  = self._embed([query_text])   # (1, d_embed)
+            query_texts.append(query_text)
+            valid_missing_indices.append(i)
 
-            # ── FAISS retrieval ───────────────────────────────────────
-            nn_indices, nn_dists = self._retrieve(query_vec[0], k)
+        if not valid_missing_indices:
+            return X_arr
 
-            neighbours = self.context_store_[nn_indices]   # (k, n_features)
+        # ── Pass 2: Batched embedding and FAISS retrieval ─────────────────────
+        query_vecs = self._embed(query_texts)
+        distances, indices = self.faiss_index_.search(query_vecs, k)
 
-            # ── Generation ───────────────────────────────────────────
-            if self.mode == "aggregation":
-                X_arr[i] = self._aggregate_neighbours(
+        # ── Pass 3: Generation (Aggregation or LLM) ───────────────────────────
+        if self.mode == "aggregation":
+            for idx, nn_indices, nn_dists in zip(valid_missing_indices, indices, distances):
+                row = X_arr[idx]
+                missing_mask = np.isnan(row)
+                neighbours = self.context_store_[nn_indices]
+                X_arr[idx] = self._aggregate_neighbours(
                     neighbours, nn_dists, missing_mask, row
                 )
-            else:  # "llm"
-                batch_indices.append(i)
+        else:  # "llm"
+            for idx, nn_indices in zip(valid_missing_indices, indices):
+                row = X_arr[idx]
+                missing_mask = np.isnan(row)
+
+                batch_indices.append(idx)
                 batch_rows.append(row)
                 batch_missing_masks.append(missing_mask)
                 batch_nn_indices.append(nn_indices)
@@ -613,20 +631,20 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                     imputed_rows = self._llm_impute_batch(
                         batch_rows, batch_missing_masks, batch_nn_indices, col_names
                     )
-                    for idx, imp_row in zip(batch_indices, imputed_rows):
-                        X_arr[idx] = imp_row
+                    for i_batch, imp_row in zip(batch_indices, imputed_rows):
+                        X_arr[i_batch] = imp_row
                     
                     batch_indices.clear()
                     batch_rows.clear()
                     batch_missing_masks.clear()
                     batch_nn_indices.clear()
 
-        if batch_indices:  # process remaining
-            imputed_rows = self._llm_impute_batch(
-                batch_rows, batch_missing_masks, batch_nn_indices, col_names
-            )
-            for idx, imp_row in zip(batch_indices, imputed_rows):
-                X_arr[idx] = imp_row
+            if batch_indices:  # process remaining
+                imputed_rows = self._llm_impute_batch(
+                    batch_rows, batch_missing_masks, batch_nn_indices, col_names
+                )
+                for i_batch, imp_row in zip(batch_indices, imputed_rows):
+                    X_arr[i_batch] = imp_row
 
         return X_arr
 
