@@ -154,45 +154,27 @@ def _build_rag_prompt(
     LLM to impute the missing values in the query rows (batch processing).
     """
     headers_str = ", ".join(all_cols)
-    
-    prompt = f"""You are an expert data analyst working with the {dataset_name} dataset.
-
-I will give you {len(batch_data)} incomplete record(s) with missing values.
-For each incomplete record, I will provide similar complete records (retrieved context).
-Your task is to impute ONLY the missing values in the incomplete record(s).
-"""
+    # Refined logic to prevent "breaking"
+    prompt = f"ACT AS A DATA CONVERSION ENGINE. Task: Impute missing values for {dataset_name}.\n"
+    prompt += f"SCHEMA: Total of {len(all_cols)} columns. Headers: {headers_str}\n"
 
     for i, data in enumerate(batch_data):
-        context_block = "\n".join(
-            f"  Context {j+1}: {row}" for j, row in enumerate(data['context_rows'])
-        )
-        missing_str = ", ".join(data['missing_cols'])
-        prompt += f"""
---- Record {i+1} ---
-Retrieved context records:
-{context_block}
-
-Incomplete record (observed features only):
-  Query: {data['missing_row_text']}
-
-Missing features to impute: [{missing_str}]
-"""
+        prompt += f"\n--- TASK {i+1} ---\n"
+        prompt += f"REFERENCE DATA (Context):\n{data['context_rows']}\n"
+        prompt += f"INPUT TO COMPLETE (Query): {data['missing_row_text']}\n"
+        prompt += f"FILL THESE SPECIFIC COLUMNS: {data['missing_cols']}\n"
 
     prompt += f"""
-All feature names ({len(all_cols)}): [{headers_str}]
+    ---
+    OUTPUT INSTRUCTIONS:
+    1. Provide exactly {len(batch_data)} rows of data.
+    2. DO NOT change existing values in the Query.
+    3. Every row must have {len(all_cols)} comma-separated values.
+    4. Output MUST be a single code block.
 
-Output Format:
-Return exactly {len(batch_data)} CSV row(s) inside a single Markdown code block with ALL {len(all_cols)} columns \
-(observed + imputed), using the original values for observed features. Keep the exact order of the queried records.
-
-Strict Rules:
-1. Start with: ```csv
-2. First line inside the block = header: {headers_str}
-3. The next {len(batch_data)} line(s) = values (comma-separated), one line for each incomplete record.
-4. End with: ```
-5. No explanations. Every column must appear exactly once per row.
-6. Do NOT return NaN or ? for any value.
-"""
+    ```csv
+    {headers_str}
+    """
     return prompt
 
 
@@ -533,7 +515,7 @@ class RAGImputer(BaseEstimator, TransformerMixin):
 
         # Load embedding model
         SentenceTransformer = _require_sentence_transformers()
-        self.embedding_model_ = SentenceTransformer(self.embedding_model)
+        self.embedding_model_ = SentenceTransformer(self.embedding_model, cache_folder="./embedding_cache")
 
         # Embed and build FAISS index
         context_vecs = self._embed(context_texts)   # (n_complete, d_embed)

@@ -511,22 +511,12 @@ class BenchmarkPipeline:
         tabela_resultados = {}
 
         tabela_resultados["datasets"] = [
-            self.pima,
-            self.cleveland,
             self.wiscosin,
-            self.parkinsons,
             self.hepatitis,
             self.mathernal_risk,
             self.chronic,
             self.stalog,
-            self.cervical,
-            self.iris,
-            self.wine,
-            self.bc_coimbra,
-            self.student_math,
             self.student_port,
-            self.user,
-            self.credit_approval,
             self.german_credit,
             self.compass_4k,
             self.stroke,
@@ -534,22 +524,13 @@ class BenchmarkPipeline:
         ]
 
         tabela_resultados["nome_datasets"] = [
-            "pima",
-            "cleveland",
+            
             "wiscosin",
-            "parkinsons",
             "hepatitis",
             "mathernal_risk",
             "chronic",
             "stalog",
-            "cervical",
-            "iris",
-            "wine",
-            "bc_coimbra",
-            "student_math",
             "student_port",
-            "user",
-            "credit-approval",
             "german-credit",
             "compass-4k",
             "stroke",

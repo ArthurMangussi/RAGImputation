@@ -17,6 +17,11 @@ import os
 
 from algorithms.llm import DATASET_NAMES, MAPPED_LLMS
 
+from transformers import logging as transformers_logging
+
+# Isso remove os avisos de carregamento, deixando o console mais limpo
+transformers_logging.set_verbosity_error()
+
 # Register RAG in the mapped-LLM table so directory names are consistent
 MAPPED_LLMS = {
     **MAPPED_LLMS,
@@ -113,8 +118,10 @@ def pipeline_benchmark_imputation(
                             binary_val=binary_features,
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
-                            llm_api="gemini",
+                            llm_api="open_router",
+                            llm_model_name="openai/gpt-5.4-nano",
                             mode="llm",
+                            llm_batch_size=128,
                             dataset_name=DATASET_NAMES.get(nome, nome)
                         )
                         output_md_test_raw = model.transform(
@@ -193,7 +200,7 @@ if __name__ == "__main__":
     datasets = MyPipeline.carrega_datasets(diretorio)
 
     pipeline = BenchmarkPipeline(datasets)
-    tabela_resultados = pipeline.cria_tabela()
+    tabela_resultados = pipeline.cria_tabela_sintetico()
 
     mecanismo = "MNAR"
         
@@ -201,3 +208,4 @@ if __name__ == "__main__":
     pipeline_benchmark_imputation("knn", mecanismo, tabela_resultados)
     pipeline_benchmark_imputation("missForest", mecanismo, tabela_resultados)
     pipeline_benchmark_imputation("mice", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("gain", mecanismo, tabela_resultados)
