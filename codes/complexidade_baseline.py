@@ -7,31 +7,33 @@
 # =============================================================================
 
 __author__ = 'Arthur Dantas Mangussi'
+import os
+import sys
 
-from utilsMsc.MyADML import AdversarialML
-from utilsMsc.MyComplexity import ComplexityDatasets
+sys.path.append("./")
+
+from utils.MyComplexity import ComplexityDatasets
 import pandas as pd
-from utilsMsc.MyUtils import MyPipeline
-from utilsMsc.MyResults import AnalysisResults
+from utils.MyMain import BenchmarkPipeline
+from utils.MyUtils import MyPipeline
 
 if __name__ == '__main__':
 
     diretorio = "./data"
     datasets = MyPipeline.carrega_datasets(diretorio)
 
-    adv_ml = AdversarialML(datasets)
-    tabela_resultados = adv_ml.cria_tabela()
+    pipeline = BenchmarkPipeline(datasets)
+    tabela_resultados = pipeline.cria_tabela_sintetico()
 
-    mecanismo = "Baseline"
-
-    # ComplexityDatasets.cria_arquivo_arff(mecanismo,tabela_resultados)
+    #for nome in os.listdir("./data/synthetic"): 
+    #    ComplexityDatasets.cria_arquivo_arff(f"/home/gpu-10-2025/Área de trabalho/RAGImputation/data/synthetic/{nome}", nome.split(".")[0])
 
     bs = {}
-    for nome in tabela_resultados['nome_datasets']:
+    for nome in os.listdir("./data/synthetic"): 
         print(f"Complexidade --> {nome}")
-        path = f'./Complexidade/{mecanismo}_Multivariado/Arquivos/{nome}.arff'
+        path = f'./Complexidade/{nome.split(".")[0]}.arff'
         bs[nome] = ComplexityDatasets.analisa_complexidade(path)
 
     pd.DataFrame(bs).to_excel(
-        f'./Complexidade/{mecanismo}_Multivariado/baseline.xlsx'
+        f'./Complexidade/baseline.xlsx'
     )

@@ -22,7 +22,7 @@ class ComplexityDatasets:
     # ------------------------------------------------------------------------
     @staticmethod
     def analisa_complexidade(path: str) -> dict:
-        complexity = Complexity(path)
+        complexity = Complexity(path, distance_func="HEOM")
         return {
             # Feature Overlap
             "f1v": complexity.F1v(),
@@ -39,26 +39,19 @@ class ComplexityDatasets:
     @staticmethod
     def cria_arquivo_arff(
         path: str,
-        type_attack: str,
-        mechanism: str,
-        model_impt: str,
-        nome_dataset: str,
-        mr: int,
+        nome_dataset: str
     ):
 
         dados = pd.read_csv(path)
 
         arff_content = ComplexityDatasets.save_arff(
             data_complex=dados,
-            type_attack=type_attack,
-            mechanism=mechanism,
-            model_impt=model_impt,
             nome_dataset=nome_dataset,
         )
 
         # Salvar o conteúdo ARFF em um arquivo
         with open(
-            f"./Complexidade/{type_attack}/{mechanism}/{model_impt}/{nome_dataset}_md{mr}.arff",
+            f"./Complexidade/{nome_dataset}.arff",
             "w",
         ) as fcom:
             fcom.write(arff_content)
@@ -67,16 +60,9 @@ class ComplexityDatasets:
     @staticmethod
     def save_arff(
         data_complex: pd.DataFrame,
-        type_attack: str,
-        mechanism: str,
-        model_impt: str,
         nome_dataset: str,
     ):
 
-        os.makedirs(
-            f"./Complexidade/{type_attack}/{mechanism}/{model_impt}/",
-            exist_ok=True,
-        )
         atts = ComplexityDatasets.formata_arff(data_complex, nome_dataset)
 
         dictarff = {
