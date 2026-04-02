@@ -473,8 +473,6 @@ class BenchmarkPipeline:
         syn_one = pd.read_csv("./data/synthetic/synthetic-one.csv")
         syn_two = pd.read_csv("./data/synthetic/synthetic-two.csv")
         syn_three = pd.read_csv("./data/synthetic/synthetic-three.csv")
-        syn_rept_one = pd.read_csv("./data/synthetic/synthetic-repeted.csv")
-        syn_rept_two = pd.read_csv("./data/synthetic/synthetic-repeted-two.csv")
         syn_c_one = pd.read_csv("./data/synthetic/dataset_continuo_v1.csv")     
         syn_c_two = pd.read_csv("./data/synthetic/dataset_continuo_v2.csv")              
         
@@ -496,6 +494,7 @@ class BenchmarkPipeline:
                                                "feature_6", "feature_7","feature_8","feature_9","feature_10","feature_11","feature_12"])
         df_5 = df_5.sample(n=300, random_state=42).reset_index(drop=True)
 
+        syn_cont = pd.read_csv("./data/synthetic/synthetic-cont-cat.csv")
         df_1_mixed = pd.read_csv("./data/synthetic/dataset_variacao_misto_1.csv")
         df_1_mixed = self._prep.one_hot_encode(df_1_mixed,["cat_feature_1"])
 
@@ -513,8 +512,7 @@ class BenchmarkPipeline:
             syn_one.astype(float),
             syn_two.astype(float),
             syn_three.astype(float),
-            syn_rept_one.astype(float),
-            syn_rept_two.astype(float),
+            syn_c_one.astype(float),
             syn_c_two.astype(float),
             # Dados com variação categórica
             syn_cat.astype(float),
@@ -522,8 +520,8 @@ class BenchmarkPipeline:
             df_2.astype(float),
             df_3.astype(float),
             df_5.astype(float),
-
             # Ddos mixed
+            syn_cont.astype(float),
             df_1_mixed.astype(float),
             df_2_mixed.astype(float),
             df_4_mixed.astype(float),  
@@ -539,7 +537,6 @@ class BenchmarkPipeline:
             "continuous-variation-4",
             "continuous-variation-5",
             "continuous-variation-6",
-            "continuous-variation-7",
             "categorical-variation-1",
             "categorical-variation-2",
             "categorical-variation-3",
@@ -548,8 +545,8 @@ class BenchmarkPipeline:
             "mixed-variation-1",
             "mixed-variation-2",
             "mixed-variation-3",
+            "mixed-variation-4",
                         
-
         ]
         tabela_resultados["missing_rate"] = [5,10,20]
 
