@@ -469,40 +469,95 @@ class BenchmarkPipeline:
     def cria_tabela_sintetico(self):
         tabela_resultados = {}
 
-        syn_cat = pd.read_csv("./data/synthetic/synthetic-cat.csv")
         syn_cont = pd.read_csv("./data/synthetic/synthetic-cont.csv")
-        syn_cont_cat = pd.read_csv("./data/synthetic/synthetic-cont-cat.csv")
         syn_one = pd.read_csv("./data/synthetic/synthetic-one.csv")
         syn_two = pd.read_csv("./data/synthetic/synthetic-two.csv")
         syn_three = pd.read_csv("./data/synthetic/synthetic-three.csv")
         syn_rept_one = pd.read_csv("./data/synthetic/synthetic-repeted.csv")
         syn_rept_two = pd.read_csv("./data/synthetic/synthetic-repeted-two.csv")
-        syn_rept_three = pd.read_csv("./data/synthetic/synthetic-repeted-three.csv")
+        syn_c_one = pd.read_csv("./data/synthetic/dataset_continuo_v1.csv")     
+        syn_c_two = pd.read_csv("./data/synthetic/dataset_continuo_v2.csv")              
+        
+        syn_cat = pd.read_csv("./data/synthetic/synthetic-cat.csv")
+        syn_cat = self._prep.one_hot_encode(syn_cat,["Feature1","Feature2","Feature3","Feature4"])
+        
+        df_1 = pd.read_csv("./data/synthetic/dataset_variacao_1.csv")
+        df_1 = self._prep.one_hot_encode(df_1,["feature_1","feature_2","feature_3"])
+
+        df_2 = pd.read_csv("./data/synthetic/dataset_variacao_2.csv")
+        df_2 = self._prep.one_hot_encode(df_2,["feature_1","feature_2","feature_3","feature_4","feature_5","feature_6"])
+
+        df_3 = pd.read_csv("./data/synthetic/dataset_variacao_3.csv")
+        df_3 = self._prep.one_hot_encode(df_3,["feature_1","feature_2","feature_3","feature_4","feature_5",
+                                               "feature_6", "feature_7","feature_8","feature_9"])
+     
+        df_5 = pd.read_csv("./data/synthetic/dataset_variacao_4.csv")
+        df_5 = self._prep.one_hot_encode(df_5,["feature_1","feature_2","feature_3","feature_4","feature_5",
+                                               "feature_6", "feature_7","feature_8","feature_9","feature_10","feature_11","feature_12"])
+        df_5 = df_5.sample(n=300, random_state=42).reset_index(drop=True)
+
+        df_1_mixed = pd.read_csv("./data/synthetic/dataset_variacao_misto_1.csv")
+        df_1_mixed = self._prep.one_hot_encode(df_1_mixed,["cat_feature_1"])
+
+        df_2_mixed = pd.read_csv("./data/synthetic/dataset_variacao_misto_2.csv")
+        df_2_mixed = self._prep.one_hot_encode(df_2_mixed,["cat_feature_1", "cat_feature_2", "cat_feature_3"])
+
+        df_4_mixed = pd.read_csv("./data/synthetic/dataset_variacao_misto_4.csv")
+        df_4_mixed = self._prep.one_hot_encode(df_4_mixed,["cat_feature_1", "cat_feature_2", "cat_feature_3", 
+                                                           "cat_feature_4", "cat_feature_5", "cat_feature_6"])
+
+        df_9_mixed = pd.read_csv("./data/synthetic/dataset_variacao_misto_9.csv")
+        df_9_mixed = self._prep.one_hot_encode(df_9_mixed,["cat_feature_1", "cat_feature_2", "cat_feature_3", 
+                                                           "cat_feature_4", "cat_feature_5", "cat_feature_6",
+                                                           "cat_feature_7", "cat_feature_8", "cat_feature_9",
+                                                           "cat_feature_10", "cat_feature_11", "cat_feature_12", "cat_feature_13"])
+        
 
         tabela_resultados["datasets"] = [
-            syn_cat.astype(float),
+            # Dados contínuos
             syn_cont.astype(float),
-            syn_cont_cat.astype(float),
             syn_one.astype(float),
             syn_two.astype(float),
             syn_three.astype(float),
             syn_rept_one.astype(float),
             syn_rept_two.astype(float),
-            syn_rept_three.astype(float),
+            syn_c_two.astype(float),
+            # Dados com variação categórica
+            syn_cat.astype(float),
+            df_1.astype(float),
+            df_2.astype(float),
+            df_3.astype(float),
+            df_5.astype(float),
+
+            # Ddos mixed
+            df_1_mixed.astype(float),
+            df_2_mixed.astype(float),
+            df_4_mixed.astype(float),  
+            
+            
         ]
 
         tabela_resultados["nome_datasets"] = [
-            "synthetic-cat",
-            "synthetic-cont",
-            "synthetic-cont-cat",
-            "synthetic-one",
-            "synthetic-two",
-            "synthetic-three",
-            "synthetic-repeted-one",
-            "synthetic-repeted-two",
-            "synthetic-repeted-three",
+            
+            "continuous-variation-1",
+            "continuous-variation-2",
+            "continuous-variation-3",
+            "continuous-variation-4",
+            "continuous-variation-5",
+            "continuous-variation-6",
+            "continuous-variation-7",
+            "categorical-variation-1",
+            "categorical-variation-2",
+            "categorical-variation-3",
+            "categorical-variation-4",
+            "categorical-variation-5",
+            "mixed-variation-1",
+            "mixed-variation-2",
+            "mixed-variation-3",
+                        
+
         ]
-        tabela_resultados["missing_rate"] = [5, 10, 20]
+        tabela_resultados["missing_rate"] = [5,10,20]
 
         return tabela_resultados
 
@@ -518,9 +573,9 @@ class BenchmarkPipeline:
             self.stalog,
             self.student_port,
             self.german_credit,
-            self.compass_4k,
-            self.stroke,
-            self.compass_7k,
+            #self.compass_4k,
+            #self.stroke,
+            #self.compass_7k,
         ]
 
         tabela_resultados["nome_datasets"] = [
@@ -532,9 +587,9 @@ class BenchmarkPipeline:
             "stalog",
             "student_port",
             "german-credit",
-            "compass-4k",
-            "stroke",
-            "compass-7k",
+            #"compass-4k",
+            #"stroke",
+            #"compass-7k",
         ]
 
         tabela_resultados["missing_rate"] = [5, 10, 20]

@@ -25,7 +25,9 @@ transformers_logging.set_verbosity_error()
 # Register RAG in the mapped-LLM table so directory names are consistent
 MAPPED_LLMS = {
     **MAPPED_LLMS,
-    "rag": "rag",
+    "ragGPT": "ragGPT",
+    "ragGemini": "ragGemini",
+    "ragGemma": "ragGemma",
     "knn": "knn",
     "missForest": "missForest",
     "mice": "mice",
@@ -33,9 +35,10 @@ MAPPED_LLMS = {
     "gain": "gain",
 }
 
+imputation_time = {}
 
 def pipeline_benchmark_imputation(
-    model_impt: str, mecanismo: str, tabela_resultados: dict, api:str="open_router"
+    model_impt: str, mecanismo: str, tabela_resultados: dict
 ):
     "Main pipeline to perform imputation MCAR multivariate mechanism."
     _logger = MeLogger()
@@ -58,9 +61,9 @@ def pipeline_benchmark_imputation(
             df = dados.copy()
             X = df.drop(columns="target")
             y = df["target"].values
+            
             binary_features = MyPipeline.get_binary_features(data=df)
-            imputation_time = {}
-
+            
             _logger.info(f"Dataset = {nome} com MD = {md} no {model_impt}\n")
 
             fold = 0
@@ -118,8 +121,9 @@ def pipeline_benchmark_imputation(
                             binary_val=binary_features,
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
-                            llm_api="open_router",
-                            llm_model_name="openai/gpt-5.4-nano",
+                            n_neighbors = 3,
+                            llm_api="gemini",
+                            llm_model_name="gemini-3-flash-preview",
                             mode="llm",
                             llm_batch_size=128,
                             dataset_name=DATASET_NAMES.get(nome, nome)
@@ -203,9 +207,10 @@ if __name__ == "__main__":
     tabela_resultados = pipeline.cria_tabela_sintetico()
 
     mecanismo = "MNAR"
-        
-    pipeline_benchmark_imputation("rag", mecanismo, tabela_resultados)
-    pipeline_benchmark_imputation("knn", mecanismo, tabela_resultados)
-    pipeline_benchmark_imputation("missForest", mecanismo, tabela_resultados)
-    pipeline_benchmark_imputation("mice", mecanismo, tabela_resultados)
-    pipeline_benchmark_imputation("gain", mecanismo, tabela_resultados)
+    
+    #pipeline_benchmark_imputation("knn", mecanismo, tabela_resultados)
+    #pipeline_benchmark_imputation("missForest", mecanismo, tabela_resultados)
+    #pipeline_benchmark_imputation("mice", mecanismo, tabela_resultados)
+    #pipeline_benchmark_imputation("gain", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("ragGemini", mecanismo, tabela_resultados)
+    

@@ -6,7 +6,7 @@ import numpy as np
 import re, os
 from dotenv import load_dotenv
 
-# from openai import OpenAI
+from openai import OpenAI
 from utils.MeLogSingle import MeLogger
 
 # import anthropic
@@ -20,7 +20,7 @@ MAPPED_LLMS = {
     "gemini-2.5-flash-lite": "geminiLite",
     "mistralai/devstral-2512": "mistral",
     "xiaomi/mimo-v2-flash": "xiamoi",
-    "openai/gpt-4.1-nano": "gpt41nano",
+    "openai/gpt-5.4-nano": "gpt54nano",
     "gpt-5-mini": "gptMini",
     "gpt-5": "gpt5",
     "anthropic/claude-sonnet-4.5": "claude45",

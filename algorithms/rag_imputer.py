@@ -154,23 +154,37 @@ def _build_rag_prompt(
     LLM to impute the missing values in the query rows (batch processing).
     """
     headers_str = ", ".join(all_cols)
-    # Refined logic to prevent "breaking"
-    prompt = f"ACT AS A DATA CONVERSION ENGINE. Task: Impute missing values for {dataset_name}.\n"
-    prompt += f"SCHEMA: Total of {len(all_cols)} columns. Headers: {headers_str}\n"
+    prompt = f"""
+    You are an expert data analyst specializing in the {dataset_name} dataset.
+    Your task is to impute missing values in a target record by synthesizing your internal knowledge of the dataset's distributions with the provided reference context.
 
+    SCHEMA:
+    - Total Columns: {len(all_cols)}
+    - Headers: {headers_str}
+
+    TASK LOGIC:
+    1. Analyze the INPUT TO COMPLETE.
+    2. Evaluate the REFERENCE DATA provided via retrieval.
+    3. Decide: Should the missing value follow the specific pattern of the retrieved neighbors, or the general statistical trend of the {dataset_name} dataset? 
+    4. Fill all missing values.
+
+    CONSTRAINTS:
+    - DO NOT execute Python.
+    - DO NOT provide explanations.
+    - NO 'NaN', 'None', or '?' values in the output.
+    - Maintain the exact column count and order.
+
+    ---
+    """
     for i, data in enumerate(batch_data):
-        prompt += f"\n--- TASK {i+1} ---\n"
-        prompt += f"REFERENCE DATA (Context):\n{data['context_rows']}\n"
-        prompt += f"INPUT TO COMPLETE (Query): {data['missing_row_text']}\n"
-        prompt += f"FILL THESE SPECIFIC COLUMNS: {data['missing_cols']}\n"
+        prompt += f"\n[TASK {i+1}]\n"
+        prompt += f"CONTEXT (Similar Records): \n{data['context_rows']}\n"
+        prompt += f"QUERY (Target Record): {data['missing_row_text']}\n"
+        prompt += f"TARGET COLUMNS: {data['missing_cols']}\n"
 
     prompt += f"""
-    ---
-    OUTPUT INSTRUCTIONS:
-    1. Provide exactly {len(batch_data)} rows of data.
-    2. DO NOT change existing values in the Query.
-    3. Every row must have {len(all_cols)} comma-separated values.
-    4. Output MUST be a single code block.
+    OUTPUT FORMAT:
+    Return only a CSV code block containing exactly {len(batch_data)} rows.
 
     ```csv
     {headers_str}
@@ -312,10 +326,10 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         d = vectors.shape[1]
 
         if self.faiss_index_type == "flat" or len(vectors) < 1000:
-            index = faiss.IndexFlatL2(d)
+            index = faiss.IndexFlatIP(d)
         else:  # ivf – approximate, better for large datasets
             nlist = min(int(np.sqrt(len(vectors))), 256)
-            quantiser = faiss.IndexFlatL2(d)
+            quantiser = faiss.IndexFlatIP(d)
             index = faiss.IndexIVFFlat(quantiser, d, nlist)
             index.train(vectors)
 

@@ -337,7 +337,7 @@ class ModelsImputation:
                 self._logger.info("[missForest] Training...")
                 return ModelsImputation.model_missForest(x_train)
 
-            case "rag":
+            case "ragGemini":
                 self._logger.info(
                     "[RAGImputer] Building context store with embeddings + FAISS..."
                 )

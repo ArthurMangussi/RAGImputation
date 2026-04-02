@@ -10,21 +10,35 @@ from utils.MyModels import ModelsImputation
 from utils.MyPreprocessing import PreprocessingDatasets
 from utils.MeLogSingle import MeLogger
 from utils.MyResults import AnalysisResults
-
+from time import sleep
 from mdatagen.multivariate.mMAR import mMAR
-
-from time import perf_counter, sleep
+from time import perf_counter
 import os
 
-from algorithms.llm import DATASET_NAMES, llm_impute, MAPPED_LLMS
-from algorithms.rag_imputer import RAGImputer
+from algorithms.llm import DATASET_NAMES, MAPPED_LLMS
+
+from transformers import logging as transformers_logging
+
+# Isso remove os avisos de carregamento, deixando o console mais limpo
+transformers_logging.set_verbosity_error()
 
 # Register RAG in the mapped-LLM table so directory names are consistent
-MAPPED_LLMS = {**MAPPED_LLMS, "rag-aggregation": "ragAgg", "rag-llm": "ragLLM"}
+MAPPED_LLMS = {
+    **MAPPED_LLMS,
+    "ragGPT": "ragGPT",
+    "ragGemini": "ragGemini",
+    "ragGemma": "ragGemma",
+    "knn": "knn",
+    "missForest": "missForest",
+    "mice": "mice",
+    "softImpute": "softImpute",
+    "gain": "gain",
+}
 
+imputation_time = {}
 
 def pipeline_benchmark_imputation(
-    model_impt: str, mecanismo: str, tabela_resultados: dict, api:str="open_router"
+    model_impt: str, mecanismo: str, tabela_resultados: dict
 ):
     "Main pipeline to perform imputation MCAR multivariate mechanism."
     _logger = MeLogger()
@@ -47,15 +61,16 @@ def pipeline_benchmark_imputation(
             df = dados.copy()
             X = df.drop(columns="target")
             y = df["target"].values
+            
             binary_features = MyPipeline.get_binary_features(data=df)
-            imputation_time = {}
-
+            
             _logger.info(f"Dataset = {nome} com MD = {md} no {model_impt}\n")
 
             fold = 0
             cv = StratifiedKFold(n_splits=5)
             x_cv = X.values
 
+            
             for train_index, test_index in cv.split(x_cv, y):
                 _logger.info(f"Fold = {fold}")
                 x_treino, x_teste = x_cv[train_index], x_cv[test_index]
@@ -75,20 +90,25 @@ def pipeline_benchmark_imputation(
                 impt_md_train = mMAR(
                     X=X_treino_norm,
                     y=y_treino,
-                    n_xmiss=X_treino_norm.shape[1]
+                    n_xmiss=X_treino_norm.shape[1],
+                   
                 )
-                X_treino_norm_md = impt_md_train.correlated(missing_rate=md)
-                
+                X_treino_norm_md = impt_md_train.random(missing_rate=md)
+                X_treino_norm_md = X_treino_norm_md.drop(columns="target")
+
                 impt_md_test = mMAR(
                     X=X_teste_norm,
                     y=y_teste,
-                    n_xmiss=X_teste_norm.shape[1]
+                    n_xmiss=X_teste_norm.shape[1],
+                    
                 )
-                X_teste_norm_md = impt_md_test.correlated(missing_rate=md)
+                X_teste_norm_md = impt_md_test.random(missing_rate=md)
+                X_teste_norm_md = X_teste_norm_md.drop(columns="target")
                 
+
                 inicio_imputation = perf_counter()
                 attempt = 0
-                max_attempts = 5
+                max_attempts = 3
                 while attempt < max_attempts:
                     try:
                         # Inicializando e treinando o modelo
@@ -102,7 +122,11 @@ def pipeline_benchmark_imputation(
                             binary_val=binary_features,
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
-                            api=api,
+                            n_neighbors = 3,
+                            llm_api="gemini",
+                            llm_model_name="gemini-3-flash-preview",
+                            mode="llm",
+                            llm_batch_size=128,
                             dataset_name=DATASET_NAMES.get(nome, nome)
                         )
                         output_md_test_raw = model.transform(
@@ -136,7 +160,7 @@ def pipeline_benchmark_imputation(
                 (
                     mae_teste_mean,
                     mae_teste_std,
-                ) = AnalysisResults.gera_resultado_multiva_nrmse(
+                ) = AnalysisResults.gera_resultado_multiva(
                     resposta=output_md_test,
                     dataset_normalizado_md=X_teste_norm_md,
                     dataset_normalizado_original=X_teste_norm,
@@ -181,12 +205,13 @@ if __name__ == "__main__":
     datasets = MyPipeline.carrega_datasets(diretorio)
 
     pipeline = BenchmarkPipeline(datasets)
-    tabela_resultados = pipeline.cria_tabela()
+    tabela_resultados = pipeline.cria_tabela_sintetico()
 
     mecanismo = "MAR"
-
-    pipeline_benchmark_imputation(
-        "openai/gpt-4.1-nano", 
-        mecanismo, 
-        tabela_resultados)
+    
+    #pipeline_benchmark_imputation("knn", mecanismo, tabela_resultados)
+    #pipeline_benchmark_imputation("missForest", mecanismo, tabela_resultados)
+    #pipeline_benchmark_imputation("mice", mecanismo, tabela_resultados)
+    #pipeline_benchmark_imputation("gain", mecanismo, tabela_resultados)
+    pipeline_benchmark_imputation("ragGemini", mecanismo, tabela_resultados)
     
