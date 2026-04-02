@@ -506,12 +506,6 @@ class BenchmarkPipeline:
         df_4_mixed = self._prep.one_hot_encode(df_4_mixed,["cat_feature_1", "cat_feature_2", "cat_feature_3", 
                                                            "cat_feature_4", "cat_feature_5", "cat_feature_6"])
 
-        df_9_mixed = pd.read_csv("./data/synthetic/dataset_variacao_misto_9.csv")
-        df_9_mixed = self._prep.one_hot_encode(df_9_mixed,["cat_feature_1", "cat_feature_2", "cat_feature_3", 
-                                                           "cat_feature_4", "cat_feature_5", "cat_feature_6",
-                                                           "cat_feature_7", "cat_feature_8", "cat_feature_9",
-                                                           "cat_feature_10", "cat_feature_11", "cat_feature_12", "cat_feature_13"])
-        
 
         tabela_resultados["datasets"] = [
             # Dados contínuos

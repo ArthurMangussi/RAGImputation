@@ -22,7 +22,7 @@ class ComplexityDatasets:
     # ------------------------------------------------------------------------
     @staticmethod
     def analisa_complexidade(path: str) -> dict:
-        complexity = Complexity(path, distance_func="HEOM")
+        complexity = Complexity(path)
         return {
             # Feature Overlap
             "f1v": complexity.F1v(),
