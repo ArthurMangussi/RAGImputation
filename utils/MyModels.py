@@ -338,15 +338,10 @@ class ModelsImputation:
                 return ModelsImputation.model_missForest(x_train)
 
             case "ragGemini":
-                self._logger.info(
-                    "[RAGImputer] Building context store..."
-                )
+                self._logger.info("[RAGImputer] Building context store...")
                 imputer = RAGImputer(
                     n_neighbors=kwargs.get("n_neighbors", 3),
-                    retrieval=kwargs.get("retrieval", "numeric"),
                     feature_weighting=kwargs.get("feature_weighting", "correlation"),
-                    embedding_model=kwargs.get("embedding_model", "all-MiniLM-L6-v2"),
-                    faiss_index_type=kwargs.get("faiss_index_type", "flat"),
                     mode=kwargs.get("mode", "aggregation"),
                     aggregation=kwargs.get("aggregation", "weighted"),
                     weights_power=kwargs.get("weights_power", 2.0),
