@@ -16,20 +16,33 @@ RAGImputer – Retrieval-Augmented Generation for Missing Data Imputation
 Full RAG pipeline for tabular missing-data imputation:
 
     Encoding   – rows serialised to text → sentence-transformer embeddings
+                 OR direct numeric feature vectors (masked retrieval)
     Retrieval  – FAISS vector index (exact or approximate ANN)
-    Generation – weighted-mean aggregation  OR  LLM API call with context
+                 OR correlation-weighted masked Euclidean distance
+    Generation – weighted-mean / local-regression aggregation OR LLM API call
 
-Usage – aggregation mode (no LLM cost)
----------------------------------------
->>> imputer = RAGImputer(n_neighbors=5, mode="aggregation")
+Usage – numeric retrieval + aggregation (recommended, no LLM cost)
+-------------------------------------------------------------------
+>>> imputer = RAGImputer(n_neighbors=5, mode="aggregation", retrieval="numeric")
 >>> imputer.fit(X_train_complete)
 >>> X_imputed = imputer.transform(X_missing)
 
-Usage – LLM generation mode
-----------------------------
+Usage – numeric retrieval + local regression
+---------------------------------------------
+>>> imputer = RAGImputer(
+...     n_neighbors=10,
+...     retrieval="numeric",
+...     aggregation="local_regression",
+... )
+>>> imputer.fit(X_train_complete)
+>>> X_imputed = imputer.transform(X_missing)
+
+Usage – embedding retrieval + LLM generation
+----------------------------------------------
 >>> imputer = RAGImputer(
 ...     n_neighbors=5,
 ...     mode="llm",
+...     retrieval="embedding",
 ...     llm_model_name="openai/gpt-4.1-nano",
 ...     llm_api="open_router",
 ...     dataset_name="Pima Indians Diabetes",
@@ -60,7 +73,7 @@ def _require_sentence_transformers():
         return SentenceTransformer
     except ImportError as exc:
         raise ImportError(
-            "sentence-transformers is required for RAGImputer. "
+            "sentence-transformers is required for embedding retrieval. "
             "Install it with:  pip install sentence-transformers"
         ) from exc
 
@@ -71,7 +84,7 @@ def _require_faiss():
         return faiss
     except ImportError as exc:
         raise ImportError(
-            "faiss-cpu is required for RAGImputer. "
+            "faiss-cpu is required for embedding retrieval. "
             "Install it with:  pip install faiss-cpu"
         ) from exc
 
@@ -165,7 +178,7 @@ def _build_rag_prompt(
     TASK LOGIC:
     1. Analyze the INPUT TO COMPLETE.
     2. Evaluate the REFERENCE DATA provided via retrieval.
-    3. Decide: Should the missing value follow the specific pattern of the retrieved neighbors, or the general statistical trend of the {dataset_name} dataset? 
+    3. Decide: Should the missing value follow the specific pattern of the retrieved neighbors, or the general statistical trend of the {dataset_name} dataset?
     4. Fill all missing values.
 
     CONSTRAINTS:
@@ -202,20 +215,37 @@ class RAGImputer(BaseEstimator, TransformerMixin):
     Parameters
     ----------
     n_neighbors : int, default=5
-        Number of nearest neighbours to retrieve from the FAISS index.
+        Number of nearest neighbours to retrieve.
+    retrieval : {"numeric", "embedding"}, default="numeric"
+        Retrieval strategy.
+        - ``"numeric"``   – correlation-weighted masked Euclidean distance on
+                            observed features only.  No text embedding needed.
+                            Recommended for aggregation mode.
+        - ``"embedding"`` – sentence-transformer text embeddings + FAISS index.
+                            Original approach; useful mainly for LLM mode.
+    feature_weighting : {"correlation", "uniform"}, default="correlation"
+        How to weight observed features during numeric retrieval.
+        - ``"correlation"`` – weight each observed feature by its average
+                              absolute correlation with the missing features.
+        - ``"uniform"``     – equal weight for all observed features.
     embedding_model : str, default="all-MiniLM-L6-v2"
         Name of the SentenceTransformer model used to embed rows.
-        Any model from https://huggingface.co/sentence-transformers is accepted.
+        Only loaded when ``retrieval="embedding"`` or ``mode="llm"``.
     faiss_index_type : {"flat", "ivf"}, default="flat"
-        FAISS index type.
+        FAISS index type (only used when ``retrieval="embedding"``).
         - ``"flat"``  – exact L2 search, best for < 50 k rows.
         - ``"ivf"``   – approximate IVF search, faster for > 50 k rows.
     mode : {"aggregation", "llm"}, default="aggregation"
         Generation strategy after retrieval.
-        - ``"aggregation"`` – inverse-distance weighted mean of neighbour values.
+        - ``"aggregation"`` – numeric aggregation of neighbour values.
         - ``"llm"``         – retrieved rows injected as context into an LLM prompt.
-    aggregation : {"weighted", "mean"}, default="weighted"
+    aggregation : {"weighted", "mean", "local_regression"}, default="weighted"
         Aggregation sub-strategy (used only when ``mode="aggregation"``).
+        - ``"weighted"``          – inverse-distance weighted mean of neighbours.
+        - ``"mean"``              – simple mean of neighbours.
+        - ``"local_regression"``  – per-feature Ridge regression fitted on the
+                                    retrieved neighbours, using the most
+                                    correlated observed features as predictors.
     weights_power : float, default=2.0
         Exponent for inverse-distance weighting.
     llm_model_name : str, default="openai/gpt-4.1-nano"
@@ -226,7 +256,6 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         Human-readable dataset name injected into the LLM prompt.
     llm_batch_size : int, default=1
         Number of rows to impute per LLM call when ``mode="llm"``.
-        Setting > 1 reduces API round-trips but increases prompt size.
     min_complete_rows : int, default=1
         Minimum complete rows required in training data.
     random_state : int or None, default=None
@@ -235,28 +264,34 @@ class RAGImputer(BaseEstimator, TransformerMixin):
     Attributes
     ----------
     context_store_ : np.ndarray, shape (n_complete, n_features)
-        Numeric matrix of complete training rows (retrieved for aggregation).
+        Numeric matrix of complete training rows.
+    corr_matrix_ : np.ndarray, shape (n_features, n_features)
+        Pearson correlation matrix of the context store features.
     context_texts_ : list[str]
         Serialised text for each context row (used in LLM prompts).
     faiss_index_ : faiss.Index
-        Fitted FAISS index.
+        Fitted FAISS index (only when retrieval="embedding").
     embedding_model_ : SentenceTransformer
-        Loaded embedding model instance.
+        Loaded embedding model instance (only when needed).
     feature_names_in_ : list[str] or None
     n_features_in_ : int
     """
 
-    _VALID_MODES = {"aggregation", "llm"}
-    _VALID_INDEX = {"flat", "ivf"}
-    _VALID_AGG   = {"weighted", "mean"}
+    _VALID_MODES     = {"aggregation", "llm"}
+    _VALID_INDEX     = {"flat", "ivf"}
+    _VALID_AGG       = {"weighted", "mean", "local_regression"}
+    _VALID_RETRIEVAL = {"numeric", "embedding"}
+    _VALID_WEIGHTING = {"correlation", "uniform"}
 
     def __init__(
         self,
         n_neighbors: int = 5,
+        retrieval: Literal["numeric", "embedding"] = "numeric",
+        feature_weighting: Literal["correlation", "uniform"] = "correlation",
         embedding_model: str = "all-MiniLM-L6-v2",
         faiss_index_type: Literal["flat", "ivf"] = "flat",
         mode: Literal["aggregation", "llm"] = "aggregation",
-        aggregation: Literal["weighted", "mean"] = "weighted",
+        aggregation: Literal["weighted", "mean", "local_regression"] = "weighted",
         weights_power: float = 2.0,
         llm_model_name: str = "openai/gpt-4.1-nano",
         llm_api: Literal["open_router", "gemini", "gpt", "claude"] = "open_router",
@@ -266,6 +301,8 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         random_state: int | None = None,
     ) -> None:
         self.n_neighbors       = n_neighbors
+        self.retrieval         = retrieval
+        self.feature_weighting = feature_weighting
         self.embedding_model   = embedding_model
         self.faiss_index_type  = faiss_index_type
         self.mode              = mode
@@ -291,6 +328,10 @@ class RAGImputer(BaseEstimator, TransformerMixin):
             raise ValueError(f"`faiss_index_type` must be one of {self._VALID_INDEX}.")
         if self.aggregation not in self._VALID_AGG:
             raise ValueError(f"`aggregation` must be one of {self._VALID_AGG}.")
+        if self.retrieval not in self._VALID_RETRIEVAL:
+            raise ValueError(f"`retrieval` must be one of {self._VALID_RETRIEVAL}.")
+        if self.feature_weighting not in self._VALID_WEIGHTING:
+            raise ValueError(f"`feature_weighting` must be one of {self._VALID_WEIGHTING}.")
         if self.weights_power <= 0:
             raise ValueError("`weights_power` must be positive.")
 
@@ -336,11 +377,83 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         index.add(vectors)
         return index
 
-    def _retrieve(self, query_vec: np.ndarray, k: int):
-        """FAISS search. Returns (indices, l2_distances)."""
+    # ------------------------------------------------------------------
+    # Numeric retrieval (correlation-weighted masked distance)
+    # ------------------------------------------------------------------
+
+    def _retrieve_numeric(
+        self,
+        query_row: np.ndarray,
+        missing_mask: np.ndarray,
+        k: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Retrieve k nearest neighbours using masked, correlation-weighted
+        Euclidean distance on observed features only.
+
+        For each query row, only the observed (non-missing) features are used
+        to compute distances.  When ``feature_weighting="correlation"``, each
+        observed feature is weighted by its average absolute Pearson correlation
+        with the missing features — so features that are predictive of the
+        target receive higher influence during retrieval.
+
+        Returns
+        -------
+        indices : np.ndarray, shape (actual_k,)
+            Indices into ``context_store_``.
+        distances : np.ndarray, shape (actual_k,)
+            Weighted Euclidean distances (lower = closer).
+        """
+        observed_mask = ~missing_mask
+        observed_idx = np.where(observed_mask)[0]
+        missing_idx = np.where(missing_mask)[0]
+
+        # --- Feature weights for observed dimensions ---
+        if (
+            self.feature_weighting == "correlation"
+            and hasattr(self, "corr_matrix_")
+            and len(missing_idx) > 0
+        ):
+            # Average |correlation| of each observed feature with all missing features
+            w = np.abs(
+                self.corr_matrix_[np.ix_(observed_idx, missing_idx)]
+            ).mean(axis=1)
+            # Small baseline prevents zeroing out uncorrelated features
+            w = w + 0.05
+            w = w / w.sum()
+        else:
+            n_obs = max(len(observed_idx), 1)
+            w = np.ones(n_obs) / n_obs
+
+        # --- Weighted Euclidean distance ---
+        context_obs = self.context_store_[:, observed_idx]
+        query_obs = query_row[observed_idx]
+        diffs = context_obs - query_obs
+        sq_dists = (diffs ** 2) @ w   # (n_context,)
+
+        # --- Top-k selection ---
+        n = len(sq_dists)
+        actual_k = min(k, n)
+        if actual_k >= n:
+            order = np.argsort(sq_dists)
+        else:
+            part = np.argpartition(sq_dists, actual_k)[:actual_k]
+            order = part[np.argsort(sq_dists[part])]
+
+        return order, np.sqrt(sq_dists[order])
+
+    # ------------------------------------------------------------------
+    # Embedding retrieval (FAISS)
+    # ------------------------------------------------------------------
+
+    def _retrieve_embedding(self, query_vec: np.ndarray, k: int):
+        """FAISS search. Returns (indices, distances)."""
         q = query_vec.reshape(1, -1).astype(np.float32)
         distances, indices = self.faiss_index_.search(q, k)
         return indices[0], distances[0]
+
+    # ------------------------------------------------------------------
+    # Aggregation strategies
+    # ------------------------------------------------------------------
 
     def _aggregate_neighbours(
         self,
@@ -349,11 +462,15 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         missing_mask: np.ndarray,
         original_row: np.ndarray,
     ) -> np.ndarray:
-        """Weighted-mean or mean aggregation over retrieved rows."""
+        """Weighted-mean, mean, or local-regression aggregation."""
         result = original_row.copy()
         if self.aggregation == "mean":
             result[missing_mask] = neighbours[:, missing_mask].mean(axis=0)
-        else:
+        elif self.aggregation == "local_regression":
+            result = self._aggregate_local_regression(
+                neighbours, missing_mask, original_row,
+            )
+        else:  # weighted
             eps = 1e-10
             weights = 1.0 / (l2_distances ** self.weights_power + eps)
             weights /= weights.sum()
@@ -361,6 +478,62 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                 neighbours[:, missing_mask] * weights[:, np.newaxis]
             ).sum(axis=0)
         return result
+
+    def _aggregate_local_regression(
+        self,
+        neighbours: np.ndarray,
+        missing_mask: np.ndarray,
+        query_row: np.ndarray,
+    ) -> np.ndarray:
+        """Fit a per-feature Ridge regression on retrieved neighbours.
+
+        For each missing feature j, fits a small Ridge model predicting j from
+        the most correlated observed features.  The number of predictors is
+        capped at ``len(neighbours) - 1`` to avoid overfitting.
+        """
+        from sklearn.linear_model import Ridge
+
+        result = query_row.copy()
+        observed_idx = np.where(~missing_mask)[0]
+        missing_idx = np.where(missing_mask)[0]
+
+        if len(observed_idx) == 0 or len(neighbours) < 2:
+            result[missing_mask] = neighbours[:, missing_mask].mean(axis=0)
+            return result
+
+        X_local = neighbours[:, observed_idx]
+        query_obs = query_row[observed_idx].reshape(1, -1)
+
+        # Cap predictors to avoid overfitting with few neighbours
+        max_predictors = max(1, len(neighbours) - 1)
+
+        for j in missing_idx:
+            y_local = neighbours[:, j]
+
+            # Constant target → just use the mean
+            if np.std(y_local) < 1e-10:
+                result[j] = y_local.mean()
+                continue
+
+            # Select most correlated observed features if too many
+            if len(observed_idx) > max_predictors and hasattr(self, "corr_matrix_"):
+                corrs = np.abs(self.corr_matrix_[observed_idx, j])
+                top_feat = np.argsort(corrs)[-max_predictors:]
+                X_sub = X_local[:, top_feat]
+                q_sub = query_obs[:, top_feat]
+            else:
+                X_sub = X_local
+                q_sub = query_obs
+
+            reg = Ridge(alpha=1.0)
+            reg.fit(X_sub, y_local)
+            result[j] = reg.predict(q_sub)[0]
+
+        return result
+
+    # ------------------------------------------------------------------
+    # LLM helpers (unchanged from original)
+    # ------------------------------------------------------------------
 
     def _llm_impute_batch(
         self,
@@ -397,7 +570,7 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         for i, (row, missing_mask, neighbour_indices) in enumerate(zip(batch_rows, batch_missing_masks, batch_neighbour_indices)):
             result = row.copy()
             imputed_vals = imputed_vals_list[i] if i < len(imputed_vals_list) else {}
-            
+
             for j, col in enumerate(col_names):
                 if missing_mask[j]:
                     if col in imputed_vals:
@@ -413,7 +586,7 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                             stacklevel=4,
                         )
             results.append(result)
-            
+
         return results
 
     def _call_llm(self, prompt: str) -> str:
@@ -482,7 +655,7 @@ class RAGImputer(BaseEstimator, TransformerMixin):
     # ------------------------------------------------------------------
 
     def fit(self, X, y=None) -> "RAGImputer":
-        """Build the embedding-based FAISS context store from complete rows.
+        """Build the context store from complete rows.
 
         Parameters
         ----------
@@ -522,27 +695,40 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                 stacklevel=2,
             )
 
-        # Serialise rows to text
+        # Store raw numeric context
+        self.context_store_: np.ndarray = context
+
+        # Compute feature correlation matrix (used by numeric retrieval
+        # and local_regression aggregation)
+        if (
+            self.feature_weighting == "correlation"
+            or self.aggregation == "local_regression"
+        ):
+            self.corr_matrix_: np.ndarray = np.corrcoef(context.T)
+            if self.corr_matrix_.ndim == 0:
+                self.corr_matrix_ = np.array([[1.0]])
+            np.nan_to_num(self.corr_matrix_, copy=False, nan=0.0)
+
+        # Serialise rows to text (always needed for LLM prompts; kept for
+        # embedding retrieval path as well)
         context_texts = [
             _serialize_row(row, col_names) for row in context
         ]
-
-        # Load embedding model
-        SentenceTransformer = _require_sentence_transformers()
-        self.embedding_model_ = SentenceTransformer(self.embedding_model, cache_folder="./embedding_cache")
-
-        # Embed and build FAISS index
-        context_vecs = self._embed(context_texts)   # (n_complete, d_embed)
-        self.faiss_index_ = self._build_index(context_vecs)
-
-        # Store raw numeric context and text for generation
-        self.context_store_: np.ndarray = context
         self.context_texts_: list[str] = context_texts
+
+        # Build embedding index only when needed
+        if self.retrieval == "embedding" or self.mode == "llm":
+            SentenceTransformer = _require_sentence_transformers()
+            self.embedding_model_ = SentenceTransformer(
+                self.embedding_model, cache_folder="./embedding_cache",
+            )
+            context_vecs = self._embed(context_texts)
+            self.faiss_index_ = self._build_index(context_vecs)
 
         return self
 
     def transform(self, X, y=None) -> np.ndarray:
-        """Impute missing values using embedding-based retrieval.
+        """Impute missing values using retrieval-augmented generation.
 
         Parameters
         ----------
@@ -553,7 +739,7 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         -------
         X_imputed : np.ndarray, shape (n_samples, n_features)
         """
-        check_is_fitted(self, ["context_store_", "faiss_index_", "embedding_model_"])
+        check_is_fitted(self, ["context_store_"])
 
         X_arr = self._to_numpy(X).copy()
 
@@ -566,24 +752,17 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         col_names = self._get_col_names(self.n_features_in_)
         k = min(self.n_neighbors, len(self.context_store_))
 
-        batch_indices = []
-        batch_rows = []
-        batch_missing_masks = []
-        batch_nn_indices = []
-        
-        valid_missing_indices = []
-        query_texts = []
+        use_numeric = (self.retrieval == "numeric")
 
-        # ── Pass 1: Handle complete/fully-missing rows and gather query texts ─
+        # ── Identify rows that need imputation ─────────────────────────
+        missing_row_indices = []
         for i, row in enumerate(X_arr):
             missing_mask = np.isnan(row)
             if not missing_mask.any():
-                continue  # row is complete
+                continue
 
-            observed_mask = ~missing_mask
-
-            # ── Fully-missing row fallback ────────────────────────────
-            if not observed_mask.any():
+            # Fully-missing row fallback
+            if (~missing_mask).sum() == 0:
                 X_arr[i] = np.nanmean(self.context_store_, axis=0)
                 warnings.warn(
                     f"Row {i} is entirely missing. "
@@ -593,54 +772,126 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                 )
                 continue
 
-            query_text = _serialize_row(row, col_names, mask_nan=missing_mask)
-            query_texts.append(query_text)
-            valid_missing_indices.append(i)
+            missing_row_indices.append(i)
 
-        if not valid_missing_indices:
+        if not missing_row_indices:
             return X_arr
 
-        # ── Pass 2: Batched embedding and FAISS retrieval ─────────────────────
-        query_vecs = self._embed(query_texts)
-        distances, indices = self.faiss_index_.search(query_vecs, k)
-
-        # ── Pass 3: Generation (Aggregation or LLM) ───────────────────────────
-        if self.mode == "aggregation":
-            for idx, nn_indices, nn_dists in zip(valid_missing_indices, indices, distances):
-                row = X_arr[idx]
-                missing_mask = np.isnan(row)
-                neighbours = self.context_store_[nn_indices]
-                X_arr[idx] = self._aggregate_neighbours(
-                    neighbours, nn_dists, missing_mask, row
-                )
-        else:  # "llm"
-            for idx, nn_indices in zip(valid_missing_indices, indices):
-                row = X_arr[idx]
-                missing_mask = np.isnan(row)
-
-                batch_indices.append(idx)
-                batch_rows.append(row)
-                batch_missing_masks.append(missing_mask)
-                batch_nn_indices.append(nn_indices)
-
-                if len(batch_indices) == self.llm_batch_size:
-                    imputed_rows = self._llm_impute_batch(
-                        batch_rows, batch_missing_masks, batch_nn_indices, col_names
+        # ==============================================================
+        # NUMERIC RETRIEVAL PATH
+        # ==============================================================
+        if use_numeric:
+            if self.mode == "aggregation":
+                for idx in missing_row_indices:
+                    row = X_arr[idx]
+                    missing_mask = np.isnan(row)
+                    nn_idx, nn_dists = self._retrieve_numeric(
+                        row, missing_mask, k,
                     )
-                    for i_batch, imp_row in zip(batch_indices, imputed_rows):
-                        X_arr[i_batch] = imp_row
-                    
-                    batch_indices.clear()
-                    batch_rows.clear()
-                    batch_missing_masks.clear()
-                    batch_nn_indices.clear()
+                    neighbours = self.context_store_[nn_idx]
+                    X_arr[idx] = self._aggregate_neighbours(
+                        neighbours, nn_dists, missing_mask, row,
+                    )
+            else:  # "llm"
+                batch_indices: list[int] = []
+                batch_rows: list[np.ndarray] = []
+                batch_missing_masks: list[np.ndarray] = []
+                batch_nn_indices: list[np.ndarray] = []
 
-            if batch_indices:  # process remaining
-                imputed_rows = self._llm_impute_batch(
-                    batch_rows, batch_missing_masks, batch_nn_indices, col_names
+                for idx in missing_row_indices:
+                    row = X_arr[idx]
+                    missing_mask = np.isnan(row)
+                    nn_idx, _ = self._retrieve_numeric(
+                        row, missing_mask, k,
+                    )
+
+                    batch_indices.append(idx)
+                    batch_rows.append(row)
+                    batch_missing_masks.append(missing_mask)
+                    batch_nn_indices.append(nn_idx)
+
+                    if len(batch_indices) == self.llm_batch_size:
+                        imputed = self._llm_impute_batch(
+                            batch_rows, batch_missing_masks,
+                            batch_nn_indices, col_names,
+                        )
+                        for bi, ir in zip(batch_indices, imputed):
+                            X_arr[bi] = ir
+                        batch_indices.clear()
+                        batch_rows.clear()
+                        batch_missing_masks.clear()
+                        batch_nn_indices.clear()
+
+                if batch_indices:
+                    imputed = self._llm_impute_batch(
+                        batch_rows, batch_missing_masks,
+                        batch_nn_indices, col_names,
+                    )
+                    for bi, ir in zip(batch_indices, imputed):
+                        X_arr[bi] = ir
+
+        # ==============================================================
+        # EMBEDDING RETRIEVAL PATH (original approach)
+        # ==============================================================
+        else:
+            check_is_fitted(self, ["faiss_index_", "embedding_model_"])
+
+            # Batch-embed all query texts
+            query_texts = []
+            for idx in missing_row_indices:
+                row = X_arr[idx]
+                missing_mask = np.isnan(row)
+                query_texts.append(
+                    _serialize_row(row, col_names, mask_nan=missing_mask)
                 )
-                for i_batch, imp_row in zip(batch_indices, imputed_rows):
-                    X_arr[i_batch] = imp_row
+
+            query_vecs = self._embed(query_texts)
+            distances, indices = self.faiss_index_.search(query_vecs, k)
+
+            if self.mode == "aggregation":
+                for idx, nn_idx, nn_dists in zip(
+                    missing_row_indices, indices, distances,
+                ):
+                    row = X_arr[idx]
+                    missing_mask = np.isnan(row)
+                    neighbours = self.context_store_[nn_idx]
+                    X_arr[idx] = self._aggregate_neighbours(
+                        neighbours, nn_dists, missing_mask, row,
+                    )
+            else:  # "llm"
+                batch_indices = []
+                batch_rows = []
+                batch_missing_masks = []
+                batch_nn_indices = []
+
+                for idx, nn_idx in zip(missing_row_indices, indices):
+                    row = X_arr[idx]
+                    missing_mask = np.isnan(row)
+
+                    batch_indices.append(idx)
+                    batch_rows.append(row)
+                    batch_missing_masks.append(missing_mask)
+                    batch_nn_indices.append(nn_idx)
+
+                    if len(batch_indices) == self.llm_batch_size:
+                        imputed = self._llm_impute_batch(
+                            batch_rows, batch_missing_masks,
+                            batch_nn_indices, col_names,
+                        )
+                        for bi, ir in zip(batch_indices, imputed):
+                            X_arr[bi] = ir
+                        batch_indices.clear()
+                        batch_rows.clear()
+                        batch_missing_masks.clear()
+                        batch_nn_indices.clear()
+
+                if batch_indices:
+                    imputed = self._llm_impute_batch(
+                        batch_rows, batch_missing_masks,
+                        batch_nn_indices, col_names,
+                    )
+                    for bi, ir in zip(batch_indices, imputed):
+                        X_arr[bi] = ir
 
         return X_arr
 
