@@ -57,54 +57,53 @@ import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 from mdatagen.multivariate.mMAR import mMAR
 from utils.MyPreprocessing import PreprocessingDatasets
-from utils.MyModels import ModelsImputation
 from utils.MyResults import AnalysisResults
 from utils.MyUtils import MyPipeline
+from algorithms.rag_imputer import RAGImputer
 
-# 1. Load dataset
-df = pd.read_csv("data/pima.csv")
-X, y = df.drop(columns="target"), df["target"].values
+if __name__ == "__main__":
+    # 1. Load dataset
+    df = pd.read_csv("./data/pima-indians-diabetes/pima_diabetes.csv")
+    X, y = df.drop(columns="target"), df["target"].values
 
-# 2. Cross-validation loop
-cv = StratifiedKFold(n_splits=5)
-for train_idx, test_idx in cv.split(X.values, y):
-    X_train = pd.DataFrame(X.values[train_idx], columns=X.columns)
-    X_test  = pd.DataFrame(X.values[test_idx],  columns=X.columns)
+    # 2. Cross-validation loop
+    cv = StratifiedKFold(n_splits=5)
+    for train_idx, test_idx in cv.split(X.values, y):
+        X_train = pd.DataFrame(X.values[train_idx], columns=X.columns)
+        X_test = pd.DataFrame(X.values[test_idx], columns=X.columns)
 
-    # Normalise
-    scaler = PreprocessingDatasets.inicializa_normalizacao(X_train)
-    X_train_norm = PreprocessingDatasets.normaliza_dados(scaler, X_train)
-    X_test_norm  = PreprocessingDatasets.normaliza_dados(scaler, X_test)
+        # Normalise
+        scaler = PreprocessingDatasets.inicializa_normalizacao(X_train)
+        X_train_norm = PreprocessingDatasets.normaliza_dados(scaler, X_train)
+        X_test_norm = PreprocessingDatasets.normaliza_dados(scaler, X_test)
 
-    # Inject missing values (MAR, 30%)
-    X_test_md = mMAR(X=X_test_norm, y=y[test_idx],
-                     n_xmiss=X_test_norm.shape[1]).random(missing_rate=0.3)
-    X_test_md = X_test_md.drop(columns="target")
+        # Inject missing values (MAR, 30%)
+        impt_md_test = mMAR(
+            X=X_test_norm,
+            y=y[test_idx],
+            n_xmiss=X_test_norm.shape[1],
+        )
+        X_teste_norm_md = impt_md_test.random(missing_rate=30)
+        X_teste_norm_md = X_teste_norm_md.drop(columns="target")
 
-    # 3. Fit RAGImputer on complete training data, impute test set
-    models = ModelsImputation()
-    model = models.choose_model(
-        model="ragGemini",
-        x_train=X_train_norm, x_test=X_test_md,
-        x_test_complete=X_test_norm,
-        x_train_complete=X_train_norm,
-        input_shape=X_train_norm.shape[1],
-        n_neighbors=10,
-        llm_api="gemini",
-        llm_model_name="gemini-3-flash-preview",
-        mode="llm",
-        llm_batch_size=128,
-        dataset_name="Pima Indians Diabetes",
-    )
-    X_imputed = model.transform(X_test_md.values)
+        # 3. Fit RAGImputer on complete training data, impute test set
+        model = RAGImputer(
+            n_neighbors=10,
+            llm_api="open_router",
+            llm_model_name="google/gemini-3-flash-preview",
+            dataset_name="Pima Indians Diabetes",
+        )
+        model.fit(X_train_norm.values)
+        X_imputed = model.transform(X_teste_norm_md.values)
 
-    # 4. Evaluate
-    mae_mean, mae_std = AnalysisResults.gera_resultado_multiva(
-        resposta=X_imputed,
-        dataset_normalizado_md=X_test_md,
-        dataset_normalizado_original=X_test_norm,
-    )
-    print(f"MAE: {mae_mean:.3f} ± {mae_std:.3f}")
+        # 4. Evaluate
+        mae_mean, mae_std = AnalysisResults.gera_resultado_multiva(
+            resposta=X_imputed,
+            dataset_normalizado_md=X_teste_norm_md,
+            dataset_normalizado_original=X_test_norm,
+        )
+        print(f"MAE: {mae_mean:.3f} ± {mae_std:.3f}")
+
 ```
 
 ## Author
