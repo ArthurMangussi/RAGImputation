@@ -14,22 +14,13 @@ RAGImputer – Retrieval-Augmented Generation for Missing Data Imputation
 ========================================================================
 
 Retrieval uses correlation-weighted masked Euclidean distance on the
-observed features of each query row — no text embeddings needed.
+observed features of each query row.  Retrieved neighbours are serialised
+as context in an LLM prompt that produces the imputed values.
 
-Generation is either numeric aggregation (weighted mean, simple mean,
-or local Ridge regression) or an LLM call with retrieved context.
-
-Usage – aggregation (no LLM cost)
-----------------------------------
->>> imputer = RAGImputer(n_neighbors=5, aggregation="weighted")
->>> imputer.fit(X_train)
->>> X_imputed = imputer.transform(X_missing)
-
-Usage – LLM generation
------------------------
+Usage
+-----
 >>> imputer = RAGImputer(
 ...     n_neighbors=5,
-...     mode="llm",
 ...     llm_model_name="gemini-3-flash-preview",
 ...     llm_api="gemini",
 ...     dataset_name="Pima Indians Diabetes",
@@ -50,7 +41,7 @@ from sklearn.utils.validation import check_is_fitted
 
 
 # ---------------------------------------------------------------------------
-# Row serialisation (used only for LLM prompts)
+# Row serialisation
 # ---------------------------------------------------------------------------
 
 def _serialize_row(
@@ -155,12 +146,6 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         How to weight observed features during retrieval.
         - ``"correlation"`` – weight by |correlation| with missing features.
         - ``"uniform"``     – equal weight for all observed features.
-    mode : {"aggregation", "llm"}, default="aggregation"
-        Generation strategy after retrieval.
-    aggregation : {"weighted", "mean", "local_regression"}, default="weighted"
-        Aggregation sub-strategy (only when ``mode="aggregation"``).
-    weights_power : float, default=2.0
-        Exponent for inverse-distance weighting.
     llm_model_name : str, default="openai/gpt-4.1-nano"
         LLM model identifier.
     llm_api : {"open_router","gemini","gpt","claude"}, default="open_router"
@@ -173,49 +158,33 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         Minimum complete rows required in training data.
     """
 
-    _VALID_MODES     = {"aggregation", "llm"}
-    _VALID_AGG       = {"weighted", "mean", "local_regression"}
     _VALID_WEIGHTING = {"correlation", "uniform"}
 
     def __init__(
         self,
         n_neighbors: int = 5,
         feature_weighting: Literal["correlation", "uniform"] = "correlation",
-        mode: Literal["aggregation", "llm"] = "aggregation",
-        aggregation: Literal["weighted", "mean", "local_regression"] = "weighted",
-        weights_power: float = 2.0,
         llm_model_name: str = "openai/gpt-4.1-nano",
         llm_api: Literal["open_router", "gemini", "gpt", "claude"] = "open_router",
         dataset_name: str = "Unknown Dataset",
         llm_batch_size: int = 1,
         min_complete_rows: int = 1,
     ) -> None:
-        self.n_neighbors       = n_neighbors
+        self.n_neighbors = n_neighbors
         self.feature_weighting = feature_weighting
-        self.mode              = mode
-        self.aggregation       = aggregation
-        self.weights_power     = weights_power
-        self.llm_model_name    = llm_model_name
-        self.llm_api           = llm_api
-        self.dataset_name      = dataset_name
-        self.llm_batch_size    = llm_batch_size
+        self.llm_model_name = llm_model_name
+        self.llm_api = llm_api
+        self.dataset_name = dataset_name
+        self.llm_batch_size = llm_batch_size
         self.min_complete_rows = min_complete_rows
-
-    # ------------------------------------------------------------------
-    # Validation
-    # ------------------------------------------------------------------
 
     def _validate_params(self) -> None:
         if not isinstance(self.n_neighbors, int) or self.n_neighbors < 1:
             raise ValueError("`n_neighbors` must be a positive integer.")
-        if self.mode not in self._VALID_MODES:
-            raise ValueError(f"`mode` must be one of {self._VALID_MODES}.")
-        if self.aggregation not in self._VALID_AGG:
-            raise ValueError(f"`aggregation` must be one of {self._VALID_AGG}.")
         if self.feature_weighting not in self._VALID_WEIGHTING:
-            raise ValueError(f"`feature_weighting` must be one of {self._VALID_WEIGHTING}.")
-        if self.weights_power <= 0:
-            raise ValueError("`weights_power` must be positive.")
+            raise ValueError(
+                f"`feature_weighting` must be one of {self._VALID_WEIGHTING}."
+            )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -247,22 +216,19 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         observed_idx = np.where(~missing_mask)[0]
         missing_idx = np.where(missing_mask)[0]
 
-        # Feature weights
         if self.feature_weighting == "correlation" and len(missing_idx) > 0:
-            w = np.abs(
-                self.corr_matrix_[np.ix_(observed_idx, missing_idx)]
-            ).mean(axis=1)
+            w = np.abs(self.corr_matrix_[np.ix_(observed_idx, missing_idx)]).mean(
+                axis=1
+            )
             w = w + 0.05
             w = w / w.sum()
         else:
             n_obs = max(len(observed_idx), 1)
             w = np.ones(n_obs) / n_obs
 
-        # Weighted Euclidean distance on observed features only
         diffs = self.context_store_[:, observed_idx] - query_row[observed_idx]
         sq_dists = (diffs ** 2) @ w
 
-        # Top-k
         n = len(sq_dists)
         actual_k = min(k, n)
         if actual_k >= n:
@@ -272,77 +238,6 @@ class RAGImputer(BaseEstimator, TransformerMixin):
             order = part[np.argsort(sq_dists[part])]
 
         return order, np.sqrt(sq_dists[order])
-
-    # ------------------------------------------------------------------
-    # Aggregation
-    # ------------------------------------------------------------------
-
-    def _aggregate(
-        self,
-        neighbours: np.ndarray,
-        distances: np.ndarray,
-        missing_mask: np.ndarray,
-        original_row: np.ndarray,
-    ) -> np.ndarray:
-        result = original_row.copy()
-
-        if self.aggregation == "mean":
-            result[missing_mask] = neighbours[:, missing_mask].mean(axis=0)
-
-        elif self.aggregation == "local_regression":
-            result = self._aggregate_local_regression(
-                neighbours, missing_mask, original_row,
-            )
-
-        else:  # weighted
-            eps = 1e-10
-            w = 1.0 / (distances ** self.weights_power + eps)
-            w /= w.sum()
-            result[missing_mask] = (
-                neighbours[:, missing_mask] * w[:, np.newaxis]
-            ).sum(axis=0)
-
-        return result
-
-    def _aggregate_local_regression(
-        self,
-        neighbours: np.ndarray,
-        missing_mask: np.ndarray,
-        query_row: np.ndarray,
-    ) -> np.ndarray:
-        from sklearn.linear_model import Ridge
-
-        result = query_row.copy()
-        observed_idx = np.where(~missing_mask)[0]
-        missing_idx = np.where(missing_mask)[0]
-
-        if len(observed_idx) == 0 or len(neighbours) < 2:
-            result[missing_mask] = neighbours[:, missing_mask].mean(axis=0)
-            return result
-
-        X_local = neighbours[:, observed_idx]
-        query_obs = query_row[observed_idx].reshape(1, -1)
-        max_predictors = max(1, len(neighbours) - 1)
-
-        for j in missing_idx:
-            y_local = neighbours[:, j]
-
-            if np.std(y_local) < 1e-10:
-                result[j] = y_local.mean()
-                continue
-
-            if len(observed_idx) > max_predictors:
-                corrs = np.abs(self.corr_matrix_[observed_idx, j])
-                top = np.argsort(corrs)[-max_predictors:]
-                X_sub, q_sub = X_local[:, top], query_obs[:, top]
-            else:
-                X_sub, q_sub = X_local, query_obs
-
-            reg = Ridge(alpha=1.0)
-            reg.fit(X_sub, y_local)
-            result[j] = reg.predict(q_sub)[0]
-
-        return result
 
     # ------------------------------------------------------------------
     # LLM generation
@@ -356,13 +251,17 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         col_names: list[str],
     ) -> list[np.ndarray]:
         batch_data = []
-        for row, mask, nn_idx in zip(batch_rows, batch_missing_masks, batch_neighbour_indices):
+        for row, mask, nn_idx in zip(
+            batch_rows, batch_missing_masks, batch_neighbour_indices
+        ):
             context_texts = [self.context_texts_[i] for i in nn_idx]
-            batch_data.append({
-                "missing_row_text": _serialize_row(row, col_names, mask_nan=mask),
-                "context_rows": context_texts,
-                "missing_cols": [col_names[i] for i in np.where(mask)[0]],
-            })
+            batch_data.append(
+                {
+                    "missing_row_text": _serialize_row(row, col_names, mask_nan=mask),
+                    "context_rows": context_texts,
+                    "missing_cols": [col_names[i] for i in np.where(mask)[0]],
+                }
+            )
 
         response_text = self._call_llm(
             _build_rag_prompt(self.dataset_name, batch_data, col_names)
@@ -385,7 +284,8 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                         warnings.warn(
                             f"LLM did not return '{col}' in row {i}. "
                             "Using neighbour mean.",
-                            UserWarning, stacklevel=4,
+                            UserWarning,
+                            stacklevel=4,
                         )
             results.append(result)
 
@@ -394,31 +294,38 @@ class RAGImputer(BaseEstimator, TransformerMixin):
     def _call_llm(self, prompt: str) -> str:
         import os
         from dotenv import load_dotenv
+
         load_dotenv()
 
         match self.llm_api:
             case "open_router":
                 from openai import OpenAI
+
                 client = OpenAI(
                     base_url="https://openrouter.ai/api/v1",
                     api_key=os.getenv("API_KEY_OPEN_ROUTER"),
                 )
                 resp = client.responses.create(
-                    model=self.llm_model_name, temperature=0.05, input=prompt,
+                    model=self.llm_model_name,
+                    temperature=0.05,
+                    input=prompt,
                 )
                 return resp.output[0].content[0].text
 
             case "gpt":
                 from openai import OpenAI
+
                 client = OpenAI(api_key=os.getenv("API_KEY_GPT"))
                 resp = client.responses.create(
-                    model=self.llm_model_name, input=prompt,
+                    model=self.llm_model_name,
+                    input=prompt,
                 )
                 return resp.output_text
 
             case "gemini":
                 from google import genai
                 from google.genai import types
+
                 client = genai.Client(
                     api_key=os.getenv("API_KEY_GEMINI"),
                     http_options={"timeout": 10 * 60 * 1000},
@@ -435,9 +342,11 @@ class RAGImputer(BaseEstimator, TransformerMixin):
 
             case "claude":
                 import anthropic
+
                 client = anthropic.Anthropic(api_key=os.getenv("API_KEY_CLAUDE"))
                 resp = client.messages.create(
-                    model=self.llm_model_name, max_tokens=4096,
+                    model=self.llm_model_name,
+                    max_tokens=4096,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.05,
                 )
@@ -474,18 +383,19 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         if len(context) < self.n_neighbors:
             warnings.warn(
                 f"Context has {len(context)} rows < n_neighbors={self.n_neighbors}.",
-                UserWarning, stacklevel=2,
+                UserWarning,
+                stacklevel=2,
             )
 
         self.context_store_: np.ndarray = context
 
-        # Correlation matrix (for retrieval weights & local regression)
+        # Correlation matrix for retrieval weights
         self.corr_matrix_: np.ndarray = np.corrcoef(context.T)
         if self.corr_matrix_.ndim == 0:
             self.corr_matrix_ = np.array([[1.0]])
         np.nan_to_num(self.corr_matrix_, copy=False, nan=0.0)
 
-        # Text representations (for LLM prompts)
+        # Text representations for LLM prompts
         self.context_texts_: list[str] = [
             _serialize_row(row, col_names) for row in context
         ]
@@ -514,7 +424,8 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                 X_arr[i] = np.nanmean(self.context_store_, axis=0)
                 warnings.warn(
                     f"Row {i} entirely missing. Filled with column means.",
-                    UserWarning, stacklevel=2,
+                    UserWarning,
+                    stacklevel=2,
                 )
                 continue
             missing_row_indices.append(i)
@@ -522,18 +433,6 @@ class RAGImputer(BaseEstimator, TransformerMixin):
         if not missing_row_indices:
             return X_arr
 
-        # --- Aggregation mode ---
-        if self.mode == "aggregation":
-            for idx in missing_row_indices:
-                row = X_arr[idx]
-                mask = np.isnan(row)
-                nn_idx, nn_dists = self._retrieve(row, mask, k)
-                X_arr[idx] = self._aggregate(
-                    self.context_store_[nn_idx], nn_dists, mask, row,
-                )
-            return X_arr
-
-        # --- LLM mode ---
         batch_idx: list[int] = []
         batch_rows: list[np.ndarray] = []
         batch_masks: list[np.ndarray] = []
@@ -552,11 +451,15 @@ class RAGImputer(BaseEstimator, TransformerMixin):
             if len(batch_idx) == self.llm_batch_size:
                 for bi, ir in zip(
                     batch_idx,
-                    self._llm_impute_batch(batch_rows, batch_masks, batch_nn, col_names),
+                    self._llm_impute_batch(
+                        batch_rows, batch_masks, batch_nn, col_names
+                    ),
                 ):
                     X_arr[bi] = ir
-                batch_idx.clear(); batch_rows.clear()
-                batch_masks.clear(); batch_nn.clear()
+                batch_idx.clear()
+                batch_rows.clear()
+                batch_masks.clear()
+                batch_nn.clear()
 
         if batch_idx:
             for bi, ir in zip(

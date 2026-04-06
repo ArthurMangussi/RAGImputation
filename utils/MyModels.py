@@ -342,9 +342,6 @@ class ModelsImputation:
                 imputer = RAGImputer(
                     n_neighbors=kwargs.get("n_neighbors", 3),
                     feature_weighting=kwargs.get("feature_weighting", "correlation"),
-                    mode=kwargs.get("mode", "aggregation"),
-                    aggregation=kwargs.get("aggregation", "weighted"),
-                    weights_power=kwargs.get("weights_power", 2.0),
                     llm_model_name=kwargs.get("llm_model_name", "gemini-3-flash-preview"),
                     llm_api=kwargs.get("llm_api", "gemini"),
                     dataset_name=kwargs.get("dataset_name", "Unknown Dataset"),
