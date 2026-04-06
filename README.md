@@ -1,105 +1,115 @@
 # RAGImputation
 
-A robust framework for Missing Data Imputation utilizing both Traditional Machine Learning approaches, LLM-based approaches, and a novel Retrieval-Augmented Generation (RAG) methodology.
+A novel Retrieval-Augmented Generation (RAG) approach for missing data imputation. Instead of relying purely on statistical distance (like KNN) or generative capacity (like pure LLMs), RAGImputer combines both: it retrieves semantically similar complete rows via a **correlation-weighted masked Euclidean distance**, then feeds them as context to an LLM that produces the final imputed values.
 
-This project is part of a PhD research investigating the effectiveness of semantic embeddings, vector databases (FAISS), and Large Language Models (LLMs) in replacing traditional distance-based algorithms like KNN and MICE.
+## Method
 
-## 🚀 Features
+The core retrieval stage (`_retrieve`) uses a **two-stage** approach:
 
-- **Standardized Imputation Benchmarking:**
-  - Evaluates models across various missing data mechanisms (MCAR, MAR, MNAR) and missing rates.
-  - Automatically handles K-Fold cross-validation, feature normalization, and metric generation (MAE / NRMSE).
-  
-- **Multiple Imputers Supported via `ModelsImputation`:**
-  - `mice`, `knn`, `missforest`, `softimpute`, `gain`, `tabpfn`, `saei`, `pmivae`
-  - Multiple **pure LLMs** via OpenRouter/Gemini (Claude, GPT, Gemini, Llama, Mixtral, etc.).
-  - **`rag`**: A novel `RAGImputer` using `sentence-transformers` to map dataset rows into natural language, storing complete rows in a `faiss` index for semantic similarity search, and aggregating or prompt-injecting exact matches.
+**Stage 1 — Correlation-based feature weighting.** For a query row $\mathbf{x}^*$ with observed feature indices $O$ and missing feature indices $M$, compute a weight for each observed feature based on how strongly it correlates with the missing features:
 
-## 🛠 Installation
+$$\bar{r}_j = \frac{1}{|M|} \sum_{m \in M} |r_{jm}|, \quad j \in O$$
 
-This project relies on several specialized libraries (PyTorch, TensorFlow, FAISS, Sentence-Transformers, HuggingFace Hub, etc). 
+where $r_{jm}$ is the Pearson correlation between features $j$ and $m$ estimated from the complete training rows. Weights are then smoothed and normalised:
 
-To ensure exact reproducibility, it is highly recommended to use the provided Conda environment script (`environment.yml`).
+$$w_j = \frac{\bar{r}_j + \epsilon}{\displaystyle\sum_{l \in O} (\bar{r}_l + \epsilon)}, \quad \epsilon = 0.05$$
 
-### Option 1: Using Conda (Recommended)
+**Stage 2 — Weighted masked Euclidean distance.** Using only the observed features and the weights above, compute the distance between the query and each complete context row $\mathbf{c}_i$:
 
-1. Clone the repository and navigate into the directory.
-2. Create the conda environment:
-   ```bash
-   conda env create -f environment.yml
-   ```
-3. Activate the environment:
-   ```bash
-   conda activate RAGImputation
-   ```
+$$d(\mathbf{x}^*, \mathbf{c}_i) = \sqrt{\sum_{j \in O} w_j \left(x^*_j - c_{ij}\right)^2}$$
 
-### Option 2: Using Pip
+The $k$ nearest context rows are selected and serialised as natural-language text, then injected into an LLM prompt that produces the imputed values for the missing features.
 
-If you do not use Conda, you can use raw `pip` (Python 3.11.9 is recommended):
+## Installation
+
+### Conda (recommended)
+
+```bash
+conda env create -f environment.yml
+conda activate RAGImputation
+```
+
+### Pip
 
 ```bash
 python -m venv .venv
-# Activate the venv (Windows: .venv\Scripts\activate | Unix: source .venv/bin/activate)
+# Windows: .venv\Scripts\activate | Unix: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## ⚙️ Configuration (.env)
+### Environment variables
 
-If you are using LLMs or the RAG (`mode="llm"`), be sure to configure your API keys in the `.env` root file:
+If using LLM-based imputation, configure your API keys in a `.env` file at the project root:
 
 ```env
-API_KEY_OPEN_ROUTER=your_open_router_key_here
-API_KEY_GEMINI=your_gemini_key_here
-API_KEY_GPT=your_openai_key_here
-API_KEY_CLAUDE=your_anthropic_key_here
+API_KEY_OPEN_ROUTER=...
+API_KEY_GEMINI=...
+API_KEY_GPT=...
+API_KEY_CLAUDE=...
 ```
 
-## 🧪 Usage
+## Use Case
 
-You can trigger distinct experimental designs using the scripts inside the `codes` directory:
+Below is a minimal example reproducing the experimental benchmark used to validate the RAG imputer under the **MAR** (Missing At Random) mechanism with 5-fold cross-validation:
 
-1. Validate pure **MCAR** mechanism:
-```bash
-python codes/experimental_design_llm_mcar.py
+```python
+import pandas as pd
+from sklearn.model_selection import StratifiedKFold
+from mdatagen.multivariate.mMAR import mMAR
+from utils.MyPreprocessing import PreprocessingDatasets
+from utils.MyModels import ModelsImputation
+from utils.MyResults import AnalysisResults
+from utils.MyUtils import MyPipeline
+
+# 1. Load dataset
+df = pd.read_csv("data/pima.csv")
+X, y = df.drop(columns="target"), df["target"].values
+
+# 2. Cross-validation loop
+cv = StratifiedKFold(n_splits=5)
+for train_idx, test_idx in cv.split(X.values, y):
+    X_train = pd.DataFrame(X.values[train_idx], columns=X.columns)
+    X_test  = pd.DataFrame(X.values[test_idx],  columns=X.columns)
+
+    # Normalise
+    scaler = PreprocessingDatasets.inicializa_normalizacao(X_train)
+    X_train_norm = PreprocessingDatasets.normaliza_dados(scaler, X_train)
+    X_test_norm  = PreprocessingDatasets.normaliza_dados(scaler, X_test)
+
+    # Inject missing values (MAR, 30%)
+    X_test_md = mMAR(X=X_test_norm, y=y[test_idx],
+                     n_xmiss=X_test_norm.shape[1]).random(missing_rate=0.3)
+    X_test_md = X_test_md.drop(columns="target")
+
+    # 3. Fit RAGImputer on complete training data, impute test set
+    models = ModelsImputation()
+    model = models.choose_model(
+        model="ragGemini",
+        x_train=X_train_norm, x_test=X_test_md,
+        x_test_complete=X_test_norm,
+        x_train_complete=X_train_norm,
+        input_shape=X_train_norm.shape[1],
+        n_neighbors=10,
+        llm_api="gemini",
+        llm_model_name="gemini-3-flash-preview",
+        mode="llm",
+        llm_batch_size=128,
+        dataset_name="Pima Indians Diabetes",
+    )
+    X_imputed = model.transform(X_test_md.values)
+
+    # 4. Evaluate
+    mae_mean, mae_std = AnalysisResults.gera_resultado_multiva(
+        resposta=X_imputed,
+        dataset_normalizado_md=X_test_md,
+        dataset_normalizado_original=X_test_norm,
+    )
+    print(f"MAE: {mae_mean:.3f} ± {mae_std:.3f}")
 ```
 
-2. Validate pure **MAR** mechanism:
-```bash
-python codes/experimental_design_llm_mar.py
-```
+## Author
 
-3. Validate pure **MNAR** mechanism:
-```bash
-python codes/experimental_design_llm_mnar.py
-```
-
-All results will be automatically logged to the terminal and stored as tabular CSV files inside the `results/` folder, organized securely by model name, missing rate, mechanism, and fold index.
-
-## 🏗 Project Architecture
-
-```plaintext
-RAGImputation/
-├── algorithms/
-│   ├── llm.py           # LLMWrapper & OpenRouter/Gemini API integrators
-│   ├── rag_imputer.py   # Sentence-Transformers + FAISS RAG model
-│   ├── gain.py          # GAN architecture models
-│   ├── pmivae.py        # Partial VAE variants
-│   └── saei.py          # Siamese Autoencoders
-├── codes/               # The experimental design (MCAR, MAR, MNAR) benchmarking runners
-├── data/                # Datasets storage
-├── results/             # Auto-generated prediction results and missing data grids
-├── utils/
-│   ├── MyModels.py          # Central factory for loading *all* models reliably
-│   ├── MyPreprocessing.py   # Auto-scalers & normalizers
-│   ├── MyResults.py         # Automated MAE/NRMSE evaluators without data leakage
-│   └── MeLogSingle.py       # Custom unified logger
-├── .env                 # API Storage Keys
-├── environment.yml      # Conda Setup Script
-└── requirements.txt     # Complete raw dependency snapshot
-```
-
-## ✉️ Author
-**Arthur Dantas Mangussi**  
-Aeronautics Institute of Technologies (ITA) - Brazil  
-University of Coimbra (UC) - Portugal  
+**Arthur Dantas Mangussi**
+Aeronautics Institute of Technologies (ITA) - Brazil
+University of Coimbra (UC) - Portugal
 `mangussiarthur@gmail.com`
