@@ -96,9 +96,10 @@ if __name__ == "__main__":
         model.fit(X_train_norm.values)
         X_imputed = model.transform(X_teste_norm_md.values)
 
+        df_output_md_teste = pd.DataFrame(X_imputed, columns=X.columns)
         # 4. Evaluate
         mae_mean, mae_std = AnalysisResults.gera_resultado_multiva(
-            resposta=X_imputed,
+            resposta=df_output_md_teste,
             dataset_normalizado_md=X_teste_norm_md,
             dataset_normalizado_original=X_test_norm,
         )
