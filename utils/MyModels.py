@@ -338,7 +338,7 @@ class ModelsImputation:
                 return ModelsImputation.model_missForest(x_train)
 
             case "ragGemini":
-                self._logger.info("[RAGImputer] Building context store...")
+                self._logger.info("[RAGImputer] Training...")
                 imputer = RAGImputer(
                     n_neighbors=kwargs.get("n_neighbors", 3),
                     feature_weighting=kwargs.get("feature_weighting", "correlation"),

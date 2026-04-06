@@ -121,7 +121,7 @@ def pipeline_benchmark_imputation(
                             binary_val=binary_features,
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
-                            n_neighbors = 3,
+                            n_neighbors = 10,
                             llm_api="gemini",
                             llm_model_name="gemini-3-flash-preview",
                             mode="llm",
