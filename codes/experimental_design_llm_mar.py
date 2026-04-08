@@ -123,8 +123,8 @@ def pipeline_benchmark_imputation(
                             x_train_complete=X_treino_norm,
                             input_shape=X_treino_norm.shape[1],
                             n_neighbors = 10,
-                            llm_api="gemini",
-                            llm_model_name="gemini-3-flash-preview",
+                            llm_api="open_router",
+                            llm_model_name="google/gemini-3-flash-preview",
                             mode="llm",
                             llm_batch_size=128,
                             dataset_name=DATASET_NAMES.get(nome, nome)
