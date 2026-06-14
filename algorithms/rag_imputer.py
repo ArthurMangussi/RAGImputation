@@ -88,6 +88,36 @@ def _parse_llm_response(response_text: str, expected_cols: list[str]) -> list[di
     return []
 
 
+def _build_explain_prompt(
+    dataset_name: str,
+    missing_row_text: str,
+    context_rows: list[str],
+    imputed_row_text: str,
+    missing_cols: list[str],
+) -> str:
+    context_block = "\n".join(f"  [{i+1}] {r}" for i, r in enumerate(context_rows))
+    cols_str = ", ".join(missing_cols)
+    return f"""
+    You are an expert data analyst specializing in the {dataset_name} dataset.
+    A missing-value imputation was carried out using Retrieval-Augmented Generation (RAG).
+    Your task is to write a clear, concise explanation of WHY each imputed value was chosen.
+
+    ORIGINAL RECORD (missing values omitted):
+      {missing_row_text}
+
+    RETRIEVED SIMILAR RECORDS used as context:
+    {context_block}
+
+    IMPUTED VALUES for columns [{cols_str}]:
+      {imputed_row_text}
+
+    Write a short paragraph (3-6 sentences) explaining the reasoning behind each imputed value.
+    Reference patterns visible in the retrieved records, correlations between features, and
+    any relevant domain knowledge about the {dataset_name} dataset.
+    Do NOT repeat the raw numbers mechanically — explain the statistical or domain logic.
+    """
+
+
 def _build_rag_prompt(
     dataset_name: str,
     batch_data: list[dict],
@@ -470,6 +500,84 @@ class RAGImputer(BaseEstimator, TransformerMixin):
                 X_arr[bi] = ir
 
         return X_arr
+
+    # ------------------------------------------------------------------
+    # Explainability
+    # ------------------------------------------------------------------
+
+    def explain(
+        self,
+        X_missing,
+        X_imputed,
+        row_indices: list[int] | None = None,
+    ) -> list[str]:
+        """Return LLM-generated explanations for each imputed row.
+
+        Parameters
+        ----------
+        X_missing : array-like of shape (n_samples, n_features)
+            Original data containing NaN where values were missing.
+        X_imputed : array-like of shape (n_samples, n_features)
+            Fully imputed data returned by ``transform``.
+        row_indices : list[int] | None, default=None
+            Indices of rows to explain. When *None*, all rows that had at
+            least one missing value in ``X_missing`` are explained.
+
+        Returns
+        -------
+        list[str]
+            One explanation string per requested row, in the same order as
+            ``row_indices`` (or the auto-detected missing rows).
+        """
+        check_is_fitted(self, ["context_store_"])
+
+        X_miss_arr = self._to_numpy(X_missing)
+        X_imp_arr = self._to_numpy(X_imputed)
+
+        if X_miss_arr.shape != X_imp_arr.shape:
+            raise ValueError("`X_missing` and `X_imputed` must have the same shape.")
+        if X_miss_arr.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"Expected {self.n_features_in_} features, "
+                f"got {X_miss_arr.shape[1]}."
+            )
+
+        col_names = self._get_col_names(self.n_features_in_)
+        k = min(self.n_neighbors, len(self.context_store_))
+
+        if row_indices is None:
+            row_indices = [
+                i
+                for i, row in enumerate(X_miss_arr)
+                if np.isnan(row).any()
+            ]
+
+        explanations: list[str] = []
+        for idx in tqdm(row_indices, desc="RAGImputer explain"):
+            miss_row = X_miss_arr[idx]
+            imp_row = X_imp_arr[idx]
+            mask = np.isnan(miss_row)
+            missing_cols = [col_names[j] for j in np.where(mask)[0]]
+
+            nn_idx, _ = self._retrieve(miss_row, mask, k)
+            context_rows = [self.context_texts_[i] for i in nn_idx]
+
+            missing_row_text = _serialize_row(miss_row, col_names, mask_nan=mask)
+            imputed_row_text = ", ".join(
+                f"{col_names[j]}={imp_row[j]:.4f}"
+                for j in np.where(mask)[0]
+            )
+
+            prompt = _build_explain_prompt(
+                dataset_name=self.dataset_name,
+                missing_row_text=missing_row_text,
+                context_rows=context_rows,
+                imputed_row_text=imputed_row_text,
+                missing_cols=missing_cols,
+            )
+            explanations.append(self._call_llm(prompt))
+
+        return explanations
 
     def fit_transform(self, X, y=None, **fit_params) -> np.ndarray:
         return self.fit(X, y).transform(X)
