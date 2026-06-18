@@ -7,7 +7,8 @@
 # =============================================================================
 
 __author__ = 'Arthur Dantas Mangussi'
-
+import sys
+sys.path.append("./")
 
 import xgboost as xgb
 from utils.MeLogSingle import MeLogger
@@ -30,18 +31,19 @@ def pipeline_attacked_classification_performance(
     """
     _logger = MeLogger()
     diretorio = "./results"
-    complete_path = os.path.join(diretorio,model_impt,"DatasetsUnificados",md_mechanism)
+    complete_path = os.path.join(diretorio,model_impt,"DatasetsImputed",md_mechanism)
     
     classification_metrics = {"Dataset":[],
                                         "Missing rate":[],
                                         "F1-score":[],
                                         "Accuracy":[],
                                         "Recall":[],
-                                        "AUC":[]}
+                                        "AUC":[],
+                                        }
     
     for name in names_data:
         for missing_rate in [5,10,20]:
-            df_path = complete_path + f"\\{name}_{model_impt}_md{missing_rate}.csv"
+            df_path = complete_path + f"/{name}_{model_impt}_md{missing_rate}.csv"
             dados = pd.read_csv(df_path)
     
             try:                
@@ -112,7 +114,7 @@ if __name__ == "__main__":
             "student_port",
             "german-credit"]
 
-    for mecanismo in ["MAR_Multivariado", "MNAR_Multivariado"]:
+    for mecanismo in ["MAR", "MNAR"]:
     
         pipeline_attacked_classification_performance(
                                                     model_impt="gain",
@@ -130,3 +132,8 @@ if __name__ == "__main__":
                                                     model_impt="missForest",
                                                     md_mechanism=mecanismo,
                                                     names_data=names_dataset)
+        pipeline_attacked_classification_performance(
+                                                    model_impt="ragGemini",
+                                                    md_mechanism=mecanismo,
+                                                    names_data=names_dataset)
+                                                    
